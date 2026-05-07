@@ -140,7 +140,9 @@ export class RaceScene extends Phaser.Scene {
       const ay = this.track.startPos.y + sin * o.dx + cos * o.dy;
       const aiCar = new Car(this, ax, ay, `car_${o.color}`, COLOR_NAMES[o.color], false, {
         ...DEFAULT_CAR,
-        maxSpeed: DEFAULT_CAR.maxSpeed * Phaser.Math.FloatBetween(0.85, 0.95),
+        maxSpeed: DEFAULT_CAR.maxSpeed * Phaser.Math.FloatBetween(0.92, 1.02),
+        accel: DEFAULT_CAR.accel * Phaser.Math.FloatBetween(0.92, 1.02),
+        grip: DEFAULT_CAR.grip * Phaser.Math.FloatBetween(0.92, 1.02),
       });
       aiCar.heading = this.track.startHeading;
       this.ai.push(aiCar);

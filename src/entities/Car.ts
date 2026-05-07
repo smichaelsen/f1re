@@ -19,7 +19,7 @@ export const DEFAULT_CAR: CarConfig = {
   brake: 520,
   reverseSpeed: 120,
   turnRate: 3.2,
-  grip: 4.0,
+  grip: 1.0,
   drag: 0.6,
   offTrackDrag: 3.5,
   bodyColor: 0xe10600,
@@ -134,7 +134,7 @@ export class Car {
       const forwardSpeed = this.vx * fx + this.vy * fy;
       const lateralX = this.vx - fx * forwardSpeed;
       const lateralY = this.vy - fy * forwardSpeed;
-      const gripFactor = Math.exp(-feel.grip * dt);
+      const gripFactor = Math.exp(-feel.grip * cfg.grip * dt);
       this.vx -= lateralX * (1 - gripFactor);
       this.vy -= lateralY * (1 - gripFactor);
 
