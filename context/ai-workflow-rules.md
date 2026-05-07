@@ -28,7 +28,7 @@ If a change can't be visually verified within a single playtest, the scope is to
 
 - Do not invent product behavior not defined in the context files.
 - If a requirement is ambiguous, raise it with the user before implementing. Don't guess and refactor later.
-- If a requirement is missing entirely, add it as an open question in `context/progress-tracker.md` before continuing.
+- If a requirement is missing entirely, add it as an open question in the relevant `context/progress/<topic>.md` (or `context/progress-tracker.md` if it's truly cross-cutting) before continuing.
 - When the user asks for a feature, propose a brief plan first (1–3 bullet steps) and confirm before building.
 
 ## Protected Files
@@ -43,7 +43,7 @@ Do not modify the following without explicit instruction:
 ## Track JSON Discipline
 
 - Source of truth for track *geometry* is `scripts/gen-tracks.mjs` for the three procedural tracks. Edit the script and regenerate, do not hand-edit those JSONs.
-- Hand-authored or AI-edited tracks may exist as JSONs without a script counterpart — those are edited directly. Document which tracks are which in `progress-tracker.md` or alongside the file.
+- Hand-authored or AI-edited tracks may exist as JSONs without a script counterpart — those are edited directly. Document which tracks are which in the per-track file under `context/progress/` or alongside the JSON.
 - After regenerating tracks, sanity-check at least one track in the inspector before committing.
 
 ## Verification Process
@@ -64,7 +64,7 @@ Update the relevant context file whenever implementation changes:
 - New surface, new pickup, new track schema field → `architecture.md` (Surface System / Track Data) AND `code-standards.md` (Track Data) AND `ui-context.md` (Colors, if visual).
 - New colour or named visual constant → `ui-context.md` (Colors).
 - New invariant established by a change → `architecture.md` (Invariants).
-- Anything completed or in flight → `progress-tracker.md`.
+- Anything completed or in flight → the relevant topic file under `context/progress/`. Cross-cutting state (current phase, cross-cutting next-ups) → `context/progress-tracker.md`.
 
 If implementation diverges from a context file, update the file in the same change. Don't leave the docs trailing.
 
@@ -72,7 +72,7 @@ If implementation diverges from a context file, update the file in the same chan
 
 1. The current unit works end to end within its defined scope (verified visually or programmatically).
 2. No invariant defined in `architecture.md` was violated.
-3. `context/progress-tracker.md` reflects the completed work and the next planned step.
+3. The relevant `context/progress/<topic>.md` reflects the completed work and the next planned step (and `context/progress-tracker.md` if cross-cutting state changed).
 4. `npx tsc --noEmit` passes; `npm run build` passes.
 5. Any context-file divergence has been reconciled.
 
