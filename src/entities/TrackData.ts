@@ -7,7 +7,12 @@ export type Surface = "asphalt" | "grass" | "gravel";
 
 export interface RunoffSide {
   surface: Surface;
-  width: number;
+  /**
+   * Per-side runoff width. A `number` is uniform along the whole loop. A `number[]` overrides
+   * the width per centerline point (length should match `centerline.length`; values wrap if shorter).
+   * Use the array form for tracks that need walls right at the asphalt edge in places (Monaco-style).
+   */
+  width: number | number[];
 }
 
 export interface SurfacePatch {
@@ -87,7 +92,16 @@ function parseRunoffSide(raw: unknown, label: string): RunoffSide {
   const surface = typeof r.surface === "string" && VALID_SURFACES.has(r.surface as Surface)
     ? (r.surface as Surface)
     : "grass";
-  const width = typeof r.width === "number" && r.width >= 0 ? r.width : 0;
+  let width: number | number[] = 0;
+  if (typeof r.width === "number" && r.width >= 0) {
+    width = r.width;
+  } else if (Array.isArray(r.width)) {
+    if (r.width.length === 0)
+      throw new TrackDataError(`${label}.width array must be non-empty`);
+    if (!r.width.every((v) => typeof v === "number" && v >= 0))
+      throw new TrackDataError(`${label}.width array must contain non-negative numbers`);
+    width = (r.width as number[]).slice();
+  }
   return { surface, width };
 }
 

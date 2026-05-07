@@ -81,6 +81,15 @@ Update this file after every meaningful implementation change.
 - F1-style open-wheel sprite (44×20): rounded chassis, 4 corner wheels with silver hubs, sidepods, cockpit + helmet, front/rear wings.
 - 4 colour variants generated procedurally.
 
+### Phase 2 of runoff system — per-segment runoff width
+- `RunoffSide.width` now accepts `number | number[]`. A number is uniform; an array overrides per-centerline-point (values wrap if the array is shorter than the centerline).
+- `Track.probe(x, y)` now also returns the nearest centerline `index` (the closer endpoint of the closest segment).
+- `Track.wallOffset(side, index?)` — when `index` is supplied, returns the wall offset using the per-point width at that index. Without `index`, returns the max width across the whole loop (legacy callers stay safe).
+- `Track.offsetLoopVarying(side)` builds the runoff outer-edge polygon with per-point widths. The renderer uses it for runoff fills, walls, and the inside-grass mask. Asphalt edges still use the fixed-offset `offsetLoop` since `width` is uniform.
+- `RaceScene.applyTrackBounds` calls `wallOffset(probe.side, probe.index)` per corner so per-segment walls are honored at collision time.
+- Backward compatible: existing v1 / v2 tracks (uniform `width: number`) render unchanged.
+- This unlocks Monaco-style tracks where walls hug the asphalt at sharp corners but runoff opens up on straights, and is the architectural fix for offset-loop self-intersection at sharp curves (narrow runoff there avoids the perpendicular crossings that produce the X-pattern artifact).
+
 ### Temple of Speed — Roggia + Ascari arc-based
 - Replaced the sin-wave centerlines for Variante della Roggia and Variante Ascari with three-arc shapes (30°-60°-30° for Roggia, 60°-120°-60° for Ascari). Both return to the original line so no downstream geometry changes were needed.
 - Reason: at high peakOff, `Track.offsetLoop` produced self-intersecting offset polygons, which the canvas renders with even-odd fill rule → the visible X-shaped wall + runoff artifacts. Arcs have constant local curvature, so adjacent perpendicular offsets fan out cleanly without crossing.

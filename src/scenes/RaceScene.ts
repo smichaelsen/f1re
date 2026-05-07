@@ -276,7 +276,7 @@ export class RaceScene extends Phaser.Scene {
     let worstNy = 0;
     for (const c of car.corners()) {
       const probe = this.track.probe(c.x, c.y);
-      const wallAt = this.track.wallOffset(probe.side);
+      const wallAt = this.track.wallOffset(probe.side, probe.index);
       const overflow = probe.distance - wallAt;
       if (overflow > worstOverflow) {
         worstOverflow = overflow;

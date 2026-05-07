@@ -26,6 +26,7 @@ export interface ProbeResult {
   nx: number;
   ny: number;
   side: Side;
+  index: number;
 }
 
 const WORLD_GRASS = 0x2a6f2a;
@@ -87,14 +88,12 @@ export class Track {
     g.clear();
 
     const asphaltHalf = this.width / 2;
-    const outsideEdge = asphaltHalf + this.runoff.outside.width;
-    const insideEdge = asphaltHalf + this.runoff.inside.width;
     const kerbStripe = 12;
 
     g.fillStyle(WORLD_GRASS, 1);
     g.fillRect(-3000, -3000, 6000, 6000);
 
-    this.fillLoop(g, this.offsetLoop(-outsideEdge), SURFACE_PARAMS[this.runoff.outside.surface].color);
+    this.fillLoop(g, this.offsetLoopVarying("outside"), SURFACE_PARAMS[this.runoff.outside.surface].color);
     for (const p of this.outsidePatches) this.fillPolygon(g, p.polygon, SURFACE_PARAMS[p.surface].color);
 
     this.fillLoop(g, this.offsetLoop(-asphaltHalf), SURFACE_PARAMS.asphalt.color);
@@ -102,10 +101,10 @@ export class Track {
     this.fillLoop(g, this.offsetLoop(asphaltHalf), SURFACE_PARAMS[this.runoff.inside.surface].color);
     for (const p of this.insidePatches) this.fillPolygon(g, p.polygon, SURFACE_PARAMS[p.surface].color);
 
-    this.fillLoop(g, this.offsetLoop(insideEdge), WORLD_GRASS);
+    this.fillLoop(g, this.offsetLoopVarying("inside"), WORLD_GRASS);
 
-    this.strokeLoop(g, this.offsetLoop(-outsideEdge), WALL_COLOR, 4);
-    this.strokeLoop(g, this.offsetLoop(insideEdge), WALL_COLOR, 4);
+    this.strokeLoop(g, this.offsetLoopVarying("outside"), WALL_COLOR, 4);
+    this.strokeLoop(g, this.offsetLoopVarying("inside"), WALL_COLOR, 4);
 
     this.strokeLoop(g, this.offsetLoop(-asphaltHalf), TRACK_EDGE_LINE, 2);
     this.strokeLoop(g, this.offsetLoop(asphaltHalf), TRACK_EDGE_LINE, 2);
@@ -154,6 +153,37 @@ export class Track {
       out.push({ x: pts[i].x + nx * offset, y: pts[i].y + ny * offset });
     }
     return out;
+  }
+
+  /**
+   * Builds the polygon along the runoff outer edge for the given side, using the per-point runoff
+   * width at each centerline point. `offsetLoop` does the same with a fixed offset; this varies it.
+   */
+  private offsetLoopVarying(side: Side): TrackPoint[] {
+    const pts = this.centerline;
+    const n = pts.length;
+    const sign = side === "outside" ? -1 : 1;
+    const asphaltHalf = this.width / 2;
+    const out: TrackPoint[] = [];
+    for (let i = 0; i < n; i++) {
+      const prev = pts[(i - 1 + n) % n];
+      const next = pts[(i + 1) % n];
+      const dx = next.x - prev.x;
+      const dy = next.y - prev.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = (-dy / len) * sign;
+      const ny = (dx / len) * sign;
+      const offset = asphaltHalf + this.widthAt(side, i);
+      out.push({ x: pts[i].x + nx * offset, y: pts[i].y + ny * offset });
+    }
+    return out;
+  }
+
+  private widthAt(side: Side, index: number): number {
+    const w = side === "outside" ? this.runoff.outside.width : this.runoff.inside.width;
+    if (typeof w === "number") return w;
+    if (w.length === 0) return 0;
+    return w[((index % w.length) + w.length) % w.length];
   }
 
   private computeCurvatures(): number[] {
@@ -255,8 +285,6 @@ export class Track {
   private buildCheckpoints() {
     const count = this.checkpointCount;
     const n = this.centerline.length;
-    const outsideHalf = this.wallOffset("outside") + 10;
-    const insideHalf = this.wallOffset("inside") + 10;
     for (let i = 0; i < count; i++) {
       const idx = (this.startIndex + Math.floor((i / count) * n)) % n;
       const a = this.centerline[idx];
@@ -266,8 +294,8 @@ export class Track {
         x: a.x,
         y: a.y,
         angle: ang,
-        outsideHalf,
-        insideHalf,
+        outsideHalf: this.wallOffset("outside", idx) + 10,
+        insideHalf: this.wallOffset("inside", idx) + 10,
         index: i,
         isFinish: i === 0,
       });
@@ -282,6 +310,8 @@ export class Track {
     let bestSegDy = 0;
     let bestAx = 0;
     let bestAy = 0;
+    let bestIndex = 0;
+    let bestT = 0;
     const pts = this.centerline;
     const n = pts.length;
     for (let i = 0; i < n; i++) {
@@ -305,13 +335,16 @@ export class Track {
         bestSegDy = dy;
         bestAx = a.x;
         bestAy = a.y;
+        bestIndex = i;
+        bestT = t;
       }
     }
     const distance = Math.sqrt(minD2);
     const inv = distance > 0.0001 ? 1 / distance : 0;
     const cross = bestSegDx * (y - bestAy) - bestSegDy * (x - bestAx);
     const side: Side = cross > 0 ? "inside" : "outside";
-    return { distance, nx: (x - bestX) * inv, ny: (y - bestY) * inv, side };
+    const index = bestT >= 0.5 ? (bestIndex + 1) % n : bestIndex;
+    return { distance, nx: (x - bestX) * inv, ny: (y - bestY) * inv, side, index };
   }
 
   isOnTrack(x: number, y: number): boolean {
@@ -328,8 +361,11 @@ export class Track {
     return p.side === "outside" ? this.runoff.outside.surface : this.runoff.inside.surface;
   }
 
-  wallOffset(side: Side): number {
-    return this.width / 2 + (side === "outside" ? this.runoff.outside.width : this.runoff.inside.width);
+  wallOffset(side: Side, index?: number): number {
+    const half = this.width / 2;
+    if (index !== undefined) return half + this.widthAt(side, index);
+    const w = side === "outside" ? this.runoff.outside.width : this.runoff.inside.width;
+    return half + (typeof w === "number" ? w : Math.max(0, ...w));
   }
 
   checkpointHit(cpIndex: number, x: number, y: number): boolean {
