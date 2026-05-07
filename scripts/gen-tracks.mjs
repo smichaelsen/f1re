@@ -173,25 +173,8 @@ function templeOfSpeedPatches() {
     polygon: arcOutsidePatch(-852, 894, 96, ASPHALT, RUNOFF_OUT, -Math.PI / 8, (-3 * Math.PI) / 4),
   });
 
-  // Chicane apex insides — gravel on the cut-side of each apex.
-  // Variante della Roggia (T4+T5): (-2000, -200) → (-2000, -500), peakOff +130.
-  patches.push({
-    surface: "gravel",
-    polygon: chicaneApexInsidePatch(-2000, -200, -2000, -500, 130, 0.25, 0.15, ASPHALT, PATCH_WIDTH),
-  });
-  patches.push({
-    surface: "gravel",
-    polygon: chicaneApexInsidePatch(-2000, -200, -2000, -500, 130, 0.75, 0.15, ASPHALT, PATCH_WIDTH),
-  });
-  // Variante Ascari (T8+T9+T10): (-100, 200) → (600, 500), peakOff +130.
-  patches.push({
-    surface: "gravel",
-    polygon: chicaneApexInsidePatch(-100, 200, 600, 500, 130, 0.25, 0.13, ASPHALT, PATCH_WIDTH),
-  });
-  patches.push({
-    surface: "gravel",
-    polygon: chicaneApexInsidePatch(-100, 200, 600, 500, 130, 0.75, 0.13, ASPHALT, PATCH_WIDTH),
-  });
+  // Roggia and Ascari are now arc-based; their previous sin-wave-shaped chicane patches
+  // were removed because they reference a centerline shape that no longer exists.
 
   return patches;
 }
@@ -252,8 +235,15 @@ function templeOfSpeedCenterline() {
   // Up left side (Sector 2): (-1000, 380) → (-1000, -100)
   line(-1000, 380, -1000, -100, 20);
 
-  // T4+T5 Variante della Roggia (right-left wiggle): (-1000, -100) → (-1000, -250)
-  chicane(-1000, -100, -1000, -250, 65, 10);
+  // T4+T5 Variante della Roggia — three-arc left-right-left chicane.
+  // 30° L → 15u mid → 60° R → 15u mid → 30° L. Returns to same x line; exits at (-1000, -250).
+  line(-1000, -100, -1000, -112, 1);
+  arc(-1050, -112, 50, 0, -Math.PI / 6, 6);
+  line(-1006.70, -137, -1014.20, -149.99, 1);
+  arc(-970.90, -174.99, 50, (5 * Math.PI) / 6, (7 * Math.PI) / 6, 8);
+  line(-1014.20, -199.99, -1006.70, -212.98, 1);
+  arc(-1050, -237.98, 50, Math.PI / 6, 0, 6);
+  line(-1000, -237.98, -1000, -250, 1);
 
   // Continue up to Lesmo: (-1000, -250) → (-1000, -440)
   line(-1000, -250, -1000, -440, 8);
@@ -270,8 +260,16 @@ function templeOfSpeedCenterline() {
   // Long diagonal back-straight (DRS Zone 1): from T7 exit toward Ascari
   line(-663.4, -536.6, -50, 100, 36);
 
-  // Variante Ascari (T8+T9+T10) chicane: (-50, 100) → (300, 250) with wiggle
-  chicane(-50, 100, 300, 250, 65, 18);
+  // Variante Ascari (T8+T9+T10) — three-arc left-right-left chicane along the diagonal.
+  // 60° L → 15u mid → 120° R → 15u mid → 60° L. Returns to original line; exits at (300, 250).
+  const aH = Math.atan2(150, 350);
+  line(-50, 100, 38.50, 137.94, 8);
+  arc(58.20, 91.99, 50, Math.PI / 2 + aH, Math.PI / 6 + aH, 8);
+  line(88.15, 132.02, 100.16, 123.05, 1);
+  arc(130.12, 163.08, 50, (-5 * Math.PI) / 6 + aH, -Math.PI / 6 + aH, 12);
+  line(179.74, 157.17, 181.51, 172.05, 1);
+  arc(231.15, 166.14, 50, (5 * Math.PI) / 6 + aH, Math.PI / 2 + aH, 8);
+  line(211.45, 212.09, 300, 250, 8);
 
   // Sector 3 straight: (300, 250) → (1000, 250)
   line(300, 250, 1000, 250, 28);

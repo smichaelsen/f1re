@@ -81,6 +81,11 @@ Update this file after every meaningful implementation change.
 - F1-style open-wheel sprite (44×20): rounded chassis, 4 corner wheels with silver hubs, sidepods, cockpit + helmet, front/rear wings.
 - 4 colour variants generated procedurally.
 
+### Temple of Speed — Roggia + Ascari arc-based
+- Replaced the sin-wave centerlines for Variante della Roggia and Variante Ascari with three-arc shapes (30°-60°-30° for Roggia, 60°-120°-60° for Ascari). Both return to the original line so no downstream geometry changes were needed.
+- Reason: at high peakOff, `Track.offsetLoop` produced self-intersecting offset polygons, which the canvas renders with even-odd fill rule → the visible X-shaped wall + runoff artifacts. Arcs have constant local curvature, so adjacent perpendicular offsets fan out cleanly without crossing.
+- Sin-wave-shaped chicane gravel patches removed (geometry no longer matches). Outside-arc gravel can be re-added later for Roggia/Ascari individually.
+
 ### Temple of Speed — Prima Variante + runoff
 - Schema bump: temple-of-speed v1 → v2 with default grass runoff (outside 80, inside 30).
 - Prima Variante rebuilt as a real three-arc Monza-style chicane: ~90° right (R=48) → 5u straight → ~135° left (R=48) → 20u straight → smooth ~45° right (R=248.55). Sum of angle deltas = 0; chicane returns to y=500 so the post-T3 straight lines up with the start-finish straight. Connector + Curva Grande remain at original positions.
