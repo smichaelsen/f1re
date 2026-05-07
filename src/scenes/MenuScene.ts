@@ -1,7 +1,7 @@
 import Phaser from "phaser";
 
 export type CarColor = "red" | "blue" | "yellow" | "green";
-export type TrackKey = "oval" | "stadium" | "temple-of-speed";
+export type TrackKey = "oval" | "stadium" | "temple-of-speed" | "champions-wall";
 export type Difficulty = "easy" | "normal" | "hard";
 
 export interface DifficultyParams {
@@ -33,6 +33,7 @@ const TRACKS: { key: TrackKey; label: string; sub: string }[] = [
   { key: "oval", label: "OVAL", sub: "sweeping bends" },
   { key: "stadium", label: "STADIUM", sub: "long straights, 4 corners" },
   { key: "temple-of-speed", label: "TEMPLE OF SPEED", sub: "chicanes & flat-out straights" },
+  { key: "champions-wall", label: "CHAMPIONS' WALL", sub: "hairpin & diagonal back-straight" },
 ];
 
 const DIFFICULTY_BUTTONS: { key: Difficulty; label: string }[] = [

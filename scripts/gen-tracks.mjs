@@ -92,6 +92,163 @@ function round(n) {
   return Math.round(n * 100) / 100;
 }
 
+/**
+ * Centripetal Catmull-Rom closed-loop spline (alpha = 0.5). Centripetal
+ * parameterization avoids the cusps and convex-hull overshoot that uniform
+ * Catmull-Rom produces at sharp corners — important when the centerline
+ * curvature radius must stay above the track half-width to keep the offset
+ * polygons non-self-intersecting. Use for irregular real-world tracks.
+ */
+function catmullRomLoop(control, samplesPerSegment = 8) {
+  const n = control.length;
+  const pts = [];
+  const dist = (a, b) => Math.sqrt(Math.hypot(b.x - a.x, b.y - a.y));
+  for (let i = 0; i < n; i++) {
+    const p0 = control[(i - 1 + n) % n];
+    const p1 = control[i];
+    const p2 = control[(i + 1) % n];
+    const p3 = control[(i + 2) % n];
+    const t0 = 0;
+    const t1 = t0 + dist(p0, p1);
+    const t2 = t1 + dist(p1, p2);
+    const t3 = t2 + dist(p2, p3);
+    for (let s = 0; s < samplesPerSegment; s++) {
+      const u = t1 + ((t2 - t1) * s) / samplesPerSegment;
+      const a1x = ((t1 - u) * p0.x + (u - t0) * p1.x) / (t1 - t0);
+      const a1y = ((t1 - u) * p0.y + (u - t0) * p1.y) / (t1 - t0);
+      const a2x = ((t2 - u) * p1.x + (u - t1) * p2.x) / (t2 - t1);
+      const a2y = ((t2 - u) * p1.y + (u - t1) * p2.y) / (t2 - t1);
+      const a3x = ((t3 - u) * p2.x + (u - t2) * p3.x) / (t3 - t2);
+      const a3y = ((t3 - u) * p2.y + (u - t2) * p3.y) / (t3 - t2);
+      const b1x = ((t2 - u) * a1x + (u - t0) * a2x) / (t2 - t0);
+      const b1y = ((t2 - u) * a1y + (u - t0) * a2y) / (t2 - t0);
+      const b2x = ((t3 - u) * a2x + (u - t1) * a3x) / (t3 - t1);
+      const b2y = ((t3 - u) * a2y + (u - t1) * a3y) / (t3 - t1);
+      const cx  = ((t2 - u) * b1x + (u - t1) * b2x) / (t2 - t1);
+      const cy  = ((t2 - u) * b1y + (u - t1) * b2y) / (t2 - t1);
+      pts.push({ x: round(cx), y: round(cy) });
+    }
+  }
+  return pts;
+}
+
+/**
+ * Heading-aware chain builder. Each call appends segments connected to the
+ * previous endpoint. `sweep > 0` is a right turn (clockwise in screen coords
+ * with y-down); `sweep < 0` is a left turn.
+ */
+function chain() {
+  let x = 0, y = 0, h = 0;
+  const pts = [];
+  const api = {
+    start(sx, sy, heading) {
+      x = sx; y = sy; h = heading;
+      pts.push({ x: round(x), y: round(y) });
+      return api;
+    },
+    line(len, samples = 8) {
+      const x0 = x, y0 = y;
+      const cx = Math.cos(h), cy = Math.sin(h);
+      for (let i = 1; i <= samples; i++) {
+        const t = i / samples;
+        pts.push({ x: round(x0 + cx * len * t), y: round(y0 + cy * len * t) });
+      }
+      x = x0 + cx * len;
+      y = y0 + cy * len;
+      return api;
+    },
+    arc(radius, sweep, samples = 16) {
+      const sign = sweep >= 0 ? 1 : -1;
+      const perp = h + sign * Math.PI / 2;
+      const cx = x + Math.cos(perp) * radius;
+      const cy = y + Math.sin(perp) * radius;
+      const startAngle = h - sign * Math.PI / 2;
+      for (let i = 1; i <= samples; i++) {
+        const t = i / samples;
+        const a = startAngle + sweep * t;
+        pts.push({ x: round(cx + Math.cos(a) * radius), y: round(cy + Math.sin(a) * radius) });
+      }
+      x = cx + Math.cos(startAngle + sweep) * radius;
+      y = cy + Math.sin(startAngle + sweep) * radius;
+      h += sweep;
+      return api;
+    },
+    closeLoop() {
+      const first = pts[0];
+      const last = pts[pts.length - 1];
+      if (Math.hypot(first.x - last.x, first.y - last.y) < 5) pts.pop();
+      return api;
+    },
+    points() { return pts; },
+    state() { return { x, y, h }; },
+  };
+  return api;
+}
+
+/**
+ * Champions' Wall — Montreal-shaped loop, scaled up so there's room for the
+ * proper corners (Lance Stroll hairpin, Wall of Champions kink, Senna corner,
+ * Family Grandstand chicane, 31 chicane) instead of one smooth blob.
+ *
+ * Coordinates designed for image scale 4 (image is 1500×937 native, rendered
+ * 6000×3748 in world). Track spans roughly (-2800..2400, -1600..1120) — a
+ * ~5200×2700 footprint, ~2× the previous version.
+ *
+ * Driving direction: counter-clockwise on the image.
+ *
+ * Topology constraint: approach to the hairpin runs *west* of the loop, exit
+ * comes south-east onto main straight. If approach + exit run parallel at
+ * similar y they merge into each other under the spline → centerline figure-8.
+ */
+function championsWallControlPoints() {
+  // Coordinates traced from the reference brown centerline against the
+  // overlay. Image is 1500×937 native rendered at scale 4 centered on the
+  // origin, so image px (a, b) maps to world ((a − 750) × 4, (b − 468.5) × 4).
+  // Order is CCW driving direction.
+  return [
+    // === Climb-in to Lance Stroll hairpin ===
+    { x: -2280, y: -754 },   // 0: approach lead-in (south of loop)
+    // === Lance Stroll hairpin loop (top-left) ===
+    { x: -2480, y: -994 },   // 1: SW of loop
+    { x: -2460, y: -1354 },  // 2: west
+    { x: -2020, y: -1634 },  // 3: apex (north)
+    { x: -1640, y: -1354 },  // 4: NE
+    { x: -1240, y: -994 },   // 5: post-hairpin / 47 area
+    // === Onto main-straight diagonal ===
+    { x: -720,  y: -594 },   // 6
+    { x: -80,   y: -354 },   // 7
+    { x: 680,   y: -154 },   // 8
+    { x: 1280,  y: 6 },      // 9: approaching checker
+    { x: 1760,  y: 166 },    // 10: CHECKER
+    // === Past checker, descent to right cluster ===
+    { x: 2120,  y: 306 },    // 11: WoC kink
+    { x: 2440,  y: 446 },    // 12
+    { x: 2720,  y: 586 },    // 13: approach right hairpin
+    // === Right hairpin (far-right, wraps around 11/8-4 grandstands) ===
+    { x: 2820,  y: 766 },    // 14: NE
+    { x: 2860,  y: 926 },    // 15: east apex
+    { x: 2640,  y: 1106 },   // 16: SW (exiting west)
+    // === Heading west past PLATINE / Senna Club / Podium Club ===
+    { x: 1920,  y: 1106 },   // 17
+    { x: 1400,  y: 1006 },   // 18
+    // === Family Grandstand area ===
+    { x: 680,   y: 886 },    // 19
+    { x: 280,   y: 846 },    // 20: Toundra
+    { x: -200,  y: 766 },    // 21: past Family Grandstand
+    // === Diagonal up-left (Casino-equivalent back-straight) ===
+    { x: -680,  y: 546 },    // 22
+    { x: -1280, y: 246 },    // 23: 31 chicane area
+    // === Past 31, climb west to hairpin ===
+    { x: -1600, y: -34 },    // 24
+    { x: -1920, y: -354 },   // 25: climb
+  ];
+}
+
+function championsWallCenterline() {
+  // Higher samples per segment so corner detail stays smooth at scale.
+  return catmullRomLoop(championsWallControlPoints(), 10);
+}
+
 function arcOutsidePatch(cx, cy, r, asphaltHalf, runoff, a0, a1, samples = 16, gap = 3) {
   const inner = r + asphaltHalf + gap;
   const outer = r + asphaltHalf + runoff - gap;
@@ -342,6 +499,32 @@ const tracks = [
       },
       patches: templeOfSpeedPatches(),
       centerline: templeOfSpeedCenterline(),
+    },
+  },
+  {
+    file: "champions-wall.json",
+    data: {
+      version: 2,
+      name: "Champions' Wall",
+      description: "Montreal-shaped: hairpin, diagonal back-straight, river-side chicanes",
+      width: 140,
+      checkpoints: 12,
+      // Control point #10 is the checker; with 10 samples per segment
+      // that's index 100 in the spline output.
+      startIndex: 100,
+      runoff: {
+        outside: { surface: "grass", width: 90 },
+        inside:  { surface: "grass", width: 50 },
+      },
+      patches: [],
+      referenceOverlay: {
+        image: "inspect-overlays/champions-wall.webp",
+        x: 0,
+        y: 0,
+        scale: 4,
+        alpha: 0.4,
+      },
+      centerline: championsWallCenterline(),
     },
   },
 ];

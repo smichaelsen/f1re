@@ -2,7 +2,7 @@
 
 ## Overview
 
-F1RE is a browser-based 2D top-down racing game built with Phaser 3. It blends real Formula 1 visual cues (open-wheel cars, recognizable circuits, kerbs, runoff, walls) with arcade fun-racer mechanics (pickups, weapons, boosts). One human player races three AI opponents on hand-authored circuits loaded from JSON. The aim is the look and pacing of an F1 race with the playful chaos of Mario Kart.
+F1RE is a browser-based 2D top-down racing game built with Phaser 3. It blends real Formula 1 visual cues (open-wheel cars, recognizable circuits, kerbs, runoff, walls) with arcade fun-racer mechanics (pickups, weapons, boosts). One human player races AI opponents on hand-authored circuits loaded from JSON. The aim is the look and pacing of an F1 race with the playful chaos of Mario Kart.
 
 ## Goals
 
@@ -47,7 +47,7 @@ F1RE is a browser-based 2D top-down racing game built with Phaser 3. It blends r
 - Apex kerbs (red/white stripes) auto-detected from curvature
 - White track-edge lines on both sides of the asphalt
 - Visible start/finish stripe (checker), centerline dashes
-- Three tracks: **Oval** (sweeping bends), **Stadium** (long straights, 4 corners, grass + gravel runoff), **Temple of Speed** (Monza-shaped: chicanes + Parabolica)
+- Four tracks: **Oval** (sweeping bends), **Stadium** (long straights, 4 corners, grass + gravel runoff), **Temple of Speed** (Monza-shaped: chicanes + Parabolica), **Champions' Wall** (Montreal-shaped: hairpin + diagonal back-straight)
 
 ### Cars
 
@@ -65,7 +65,7 @@ F1RE is a browser-based 2D top-down racing game built with Phaser 3. It blends r
 
 - MenuScene: title, car select, track select, START RACE, INSPECT TRACK
 - RaceScene HUD: speed, lap, time, best lap, item slot, position panel, message flash, results overlay
-- InspectScene: read-only track viewer with pan-drag, wheel-zoom-to-cursor, +/-/fit buttons, point indices, checkpoint markers, coords readout, track cycler ([ ])
+- InspectScene: read-only track viewer with pan-drag, wheel-zoom-to-cursor, +/-/fit buttons, point indices, checkpoint markers, coords readout, track cycler ([ ]), optional semi-transparent reference-map overlay (toggle 4) for tracks based on real-world circuits
 - Two-camera split (world + UI) so HUD elements don't scale with world zoom
 
 ## Scope

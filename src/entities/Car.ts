@@ -43,6 +43,10 @@ export class Car {
   shielded = false;
   // Slipstream multiplier applied to accel + max speed. 1.0 = no draft. Set per-frame by RaceScene.
   draft = 1.0;
+  // Throttle the audio layer should treat as "commanded right now". Set by RaceScene
+  // alongside (or in lieu of) the physics input — it survives the countdown freeze so
+  // the engine can rev on the grid without affecting movement.
+  audioThrottle = 0;
   itemSlot: string | null = null;
   useItemAt: number | null = null;
 

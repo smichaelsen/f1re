@@ -11,6 +11,7 @@ export class BootScene extends Phaser.Scene {
     this.makeCarTexture("car_yellow", 0xf2c200);
     this.makeCarTexture("car_green", 0x2ecc40);
     this.makePickupTexture("pickup", 0xffffff);
+    this.load.audio("engine", "audio/engine.wav");
   }
 
   create() {

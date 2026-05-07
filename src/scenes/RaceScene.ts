@@ -5,6 +5,8 @@ import { parseTrackData, SURFACE_PARAMS } from "../entities/TrackData";
 import { Hud, formatRaceTime, type PositionRow } from "../ui/Hud";
 import { DIFFICULTIES, LAPS_MAX, LAPS_MIN, OPPONENTS_MAX, OPPONENTS_MIN } from "./MenuScene";
 import type { CarColor, Difficulty, TrackKey } from "./MenuScene";
+import { AudioBus } from "../audio/AudioBus";
+import { EngineSound } from "../audio/EngineSound";
 
 interface RaceInit {
   trackKey?: TrackKey;
@@ -78,6 +80,8 @@ export class RaceScene extends Phaser.Scene {
   missiles: Missile[] = [];
 
   private aiSkill = new Map<Car, AISkillState>();
+  private audioBus: AudioBus | null = null;
+  private engines = new Map<Car, EngineSound>();
 
   state: RaceState = "countdown";
   countdownStartedAt = 0;
@@ -118,6 +122,8 @@ export class RaceScene extends Phaser.Scene {
     this.oilSlicks = [];
     this.missiles = [];
     this.aiSkill.clear();
+    this.engines.clear();
+    this.audioBus = null;
     this.state = "countdown";
     this.raceStartedAt = 0;
     this.raceEndedAt = 0;
@@ -125,22 +131,21 @@ export class RaceScene extends Phaser.Scene {
     const raw = this.cache.json.get(`track-${this.trackKey}`);
     this.track = Track.fromData(this, parseTrackData(raw));
 
+    const playerSlot = this.startGridSlot(0);
     this.player = new Car(
       this,
-      this.track.startPos.x,
-      this.track.startPos.y,
+      playerSlot.x,
+      playerSlot.y,
       `car_${this.carColor}`,
       "YOU",
       true,
     );
-    this.player.heading = this.track.startHeading;
+    this.player.heading = playerSlot.heading;
 
     const aiColors = ALL_COLORS.filter((c) => c !== this.carColor);
     const params = DIFFICULTIES[this.difficulty];
     for (let i = 0; i < this.opponentCount; i++) {
-      const distBack = 40 + i * 40;
-      const lateral = i % 2 === 0 ? 30 : -30;
-      const slot = this.gridSlotBehindStart(distBack, lateral);
+      const slot = this.startGridSlot(i + 1);
       const color = aiColors[i % aiColors.length];
       const [pLow, pHigh] = params.perfRange;
       const [sLow, sHigh] = params.skillRange;
@@ -181,6 +186,61 @@ export class RaceScene extends Phaser.Scene {
 
     this.state = "countdown";
     this.countdownStartedAt = this.time.now;
+
+    this.setupAudio();
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.disposeAudio());
+    this.events.once(Phaser.Scenes.Events.DESTROY, () => this.disposeAudio());
+  }
+
+  private setupAudio() {
+    const buffer = this.cache.audio.get("engine") as AudioBuffer | undefined;
+    if (!buffer) return;
+    this.audioBus = new AudioBus();
+    for (const car of this.cars) {
+      const engine = new EngineSound(this.audioBus, buffer);
+      engine.setPosition(car.x, car.y);
+      engine.start();
+      this.audioBus.add(engine);
+      this.engines.set(car, engine);
+    }
+  }
+
+  private disposeAudio() {
+    if (!this.audioBus) return;
+    this.audioBus.dispose();
+    this.audioBus = null;
+    this.engines.clear();
+  }
+
+  private updateAudio() {
+    if (!this.audioBus) return;
+    const now = this.time.now;
+    this.audioBus.setListener(this.player.x, this.player.y);
+    for (const car of this.cars) {
+      const engine = this.engines.get(car);
+      if (!engine) continue;
+      engine.setPosition(car.x, car.y);
+      engine.setRevs(this.revsTargetFor(car));
+      engine.setFade(this.engineFadeFor(car, now));
+    }
+    this.audioBus.update();
+  }
+
+  private revsTargetFor(car: Car): number {
+    const speedNorm = car.config.maxSpeed > 0
+      ? Math.min(1.4, car.speed / car.config.maxSpeed)
+      : 0;
+    const throttleNorm = car.audioThrottle;
+    const base = Math.max(speedNorm, throttleNorm * 0.7);
+    const boost = car.boostTimer > 0 ? 0.15 : 0;
+    return 0.08 + base + boost;
+  }
+
+  private engineFadeFor(car: Car, now: number): number {
+    if (car.finishedAtMs == null) return 1;
+    const FADE_MS = 3000;
+    const elapsed = now - car.finishedAtMs;
+    return Math.max(0, 1 - elapsed / FADE_MS);
   }
 
   update(_time: number, deltaMs: number) {
@@ -195,11 +255,14 @@ export class RaceScene extends Phaser.Scene {
     if (this.state === "countdown") {
       this.runCountdown(now);
       for (const c of this.cars) c.update(dt, NO_INPUT);
+      this.player.audioThrottle = this.cursors.up?.isDown ? 1 : 0;
+      for (const ai of this.ai) ai.audioThrottle = 0;
     } else {
       this.runRacing(dt, now);
     }
 
     this.updateHud(now);
+    this.updateAudio();
   }
 
   // Subtle slipstream: when a car sits ~20-110u behind another car, roughly aligned and
@@ -228,6 +291,12 @@ export class RaceScene extends Phaser.Scene {
       if (draft > best) best = draft;
     }
     return best;
+  }
+
+  private startGridSlot(index: number): { x: number; y: number; heading: number } {
+    const distBack = 40 + index * 40;
+    const lateral = index % 2 === 0 ? 30 : -30;
+    return this.gridSlotBehindStart(distBack, lateral);
   }
 
   // Walks the centerline backward from the start index by `distBack` units of arc-length,
@@ -302,6 +371,7 @@ export class RaceScene extends Phaser.Scene {
       : NO_INPUT;
     for (const c of this.cars) c.draft = this.computeDraft(c);
 
+    this.player.audioThrottle = playerInput.throttle;
     this.player.update(dt, playerInput, this.surfaceFeel(this.player));
     if (playerActive && playerInput.useItem) this.useItem(this.player);
     this.applyTrackBounds(this.player);
@@ -309,6 +379,7 @@ export class RaceScene extends Phaser.Scene {
     for (const ai of this.ai) {
       const aiActive = ai.finishedAtMs == null;
       const input = aiActive ? this.aiInput(ai) : NO_INPUT;
+      ai.audioThrottle = input.throttle;
       ai.update(dt, input, this.surfaceFeel(ai));
       this.applyTrackBounds(ai);
       if (aiActive && ai.itemSlot && ai.useItemAt != null && now >= ai.useItemAt) {

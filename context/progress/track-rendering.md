@@ -36,5 +36,10 @@ How tracks are drawn from JSON, plus the surface lookup that drives physics.
 - **Runoff color contrast** — grass runoff (`0x3d8a3d`) is only slightly lighter than world grass (`0x2a6f2a`). Visible but subtle. Bump for more pop, or keep subtle?
 - **Apex kerb threshold** — currently 35th-percentile of absolute curvature. Works on 3 tracks but per-track tuning (or absolute threshold) may be needed if we add tracks where this misbehaves.
 
+### Inspector reference overlays
+- Optional `referenceOverlay` field on `TrackData` (image path + center + scale + alpha + rotation) renders a semi-transparent map under the geometry in `InspectScene`. Toggle with key `4`.
+- Inspector-only; never read by `RaceScene`. The image lives under `public/inspect-overlays/` which is gitignored — keeps potentially copyrighted source maps out of the repo while the schema field stays portable.
+- Used by Champions' Wall (Montreal map). Pattern is reusable for any future real-world-inspired track.
+
 ## Next Up
 - Demo / sample track that exercises per-segment runoff (e.g., a Monaco-shaped track).

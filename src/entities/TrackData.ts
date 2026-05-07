@@ -36,6 +36,23 @@ export interface RacingLineOverrides {
   hints?: RacingLineHint[];
 }
 
+/**
+ * Reference image displayed under the centerline in the track inspector,
+ * for iterating geometry against a real-world track map. Inspector-only;
+ * never read by RaceScene.
+ *
+ * `image` is a path under `public/`. `x`/`y` are world-space coordinates of
+ * the image center. `scale` is world units per source pixel.
+ */
+export interface ReferenceOverlay {
+  image: string;
+  x: number;
+  y: number;
+  scale: number;
+  alpha?: number;
+  rotation?: number;
+}
+
 export interface TrackData {
   version: 1 | 2;
   name: string;
@@ -47,6 +64,7 @@ export interface TrackData {
   runoff: { outside: RunoffSide; inside: RunoffSide };
   patches: SurfacePatch[];
   racingLineOverrides?: RacingLineOverrides;
+  referenceOverlay?: ReferenceOverlay;
 }
 
 export class TrackDataError extends Error {}
@@ -81,6 +99,7 @@ export function parseTrackData(raw: unknown): TrackData {
   const runoff = parseRunoff(d.runoff);
   const patches = parsePatches(d.patches);
   const racingLineOverrides = parseRacingLineOverrides(d.racingLineOverrides);
+  const referenceOverlay = parseReferenceOverlay(d.referenceOverlay);
 
   return {
     version,
@@ -93,7 +112,25 @@ export function parseTrackData(raw: unknown): TrackData {
     runoff,
     patches,
     racingLineOverrides,
+    referenceOverlay,
   };
+}
+
+function parseReferenceOverlay(raw: unknown): ReferenceOverlay | undefined {
+  if (raw == null) return undefined;
+  if (typeof raw !== "object")
+    throw new TrackDataError("referenceOverlay must be an object");
+  const r = raw as Record<string, unknown>;
+  if (typeof r.image !== "string" || r.image.length === 0)
+    throw new TrackDataError("referenceOverlay.image must be a non-empty string");
+  if (typeof r.x !== "number" || typeof r.y !== "number")
+    throw new TrackDataError("referenceOverlay.x and .y must be numbers");
+  if (typeof r.scale !== "number" || r.scale <= 0)
+    throw new TrackDataError("referenceOverlay.scale must be a positive number");
+  const alpha =
+    typeof r.alpha === "number" ? Math.max(0, Math.min(1, r.alpha)) : undefined;
+  const rotation = typeof r.rotation === "number" ? r.rotation : undefined;
+  return { image: r.image, x: r.x, y: r.y, scale: r.scale, alpha, rotation };
 }
 
 function parseRacingLineOverrides(raw: unknown): RacingLineOverrides | undefined {

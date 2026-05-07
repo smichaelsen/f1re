@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import { Track } from "../entities/Track";
-import { parseTrackData } from "../entities/TrackData";
+import { parseTrackData, type ReferenceOverlay } from "../entities/TrackData";
 import { TRACK_KEYS, type TrackKey } from "./MenuScene";
 
 interface InspectInit {
@@ -54,6 +54,10 @@ export class InspectScene extends Phaser.Scene {
   showPoints = true;
   showCheckpoints = true;
   showRacingLine = true;
+  showReferenceOverlay = true;
+
+  referenceOverlay: ReferenceOverlay | undefined;
+  referenceOverlayImage: Phaser.GameObjects.Image | null = null;
 
   overUi = false;
   isDragging = false;
@@ -65,6 +69,7 @@ export class InspectScene extends Phaser.Scene {
     one: Phaser.Input.Keyboard.Key;
     two: Phaser.Input.Keyboard.Key;
     three: Phaser.Input.Keyboard.Key;
+    four: Phaser.Input.Keyboard.Key;
     zero: Phaser.Input.Keyboard.Key;
     prev: Phaser.Input.Keyboard.Key;
     next: Phaser.Input.Keyboard.Key;
@@ -93,15 +98,19 @@ export class InspectScene extends Phaser.Scene {
     const beforeTrack = new Set(this.children.list);
 
     const raw = this.cache.json.get(`track-${this.trackKey}`);
-    this.track = Track.fromData(this, parseTrackData(raw));
+    const data = parseTrackData(raw);
+    this.referenceOverlay = data.referenceOverlay;
+    this.track = Track.fromData(this, data);
 
     for (const c of this.children.list) {
       if (!beforeTrack.has(c)) this.worldObjects.push(c);
     }
 
     const cam = this.cameras.main;
-    cam.setBounds(-3000, -3000, 6000, 6000);
+    cam.setBounds(-6000, -6000, 12000, 12000);
     cam.setBackgroundColor("#1a1a1a");
+
+    if (this.referenceOverlay) this.loadReferenceOverlay();
 
     this.overlay = this.add.graphics();
     this.overlay.setDepth(100);
@@ -123,7 +132,7 @@ export class InspectScene extends Phaser.Scene {
       this.add.text(
         20,
         this.scale.height - 30,
-        "drag pan · wheel/buttons zoom · 0 fit · 1 points · 2 checkpoints · 3 racing line · [ ] track · ESC menu",
+        "drag pan · wheel/buttons zoom · 0 fit · 1 points · 2 checkpoints · 3 racing line · 4 reference · [ ] track · ESC menu",
         { ...HUD_STYLE, fontSize: "13px", color: "#aaaaaa" },
       ),
     );
@@ -149,6 +158,7 @@ export class InspectScene extends Phaser.Scene {
       one: kb.addKey(Phaser.Input.Keyboard.KeyCodes.ONE),
       two: kb.addKey(Phaser.Input.Keyboard.KeyCodes.TWO),
       three: kb.addKey(Phaser.Input.Keyboard.KeyCodes.THREE),
+      four: kb.addKey(Phaser.Input.Keyboard.KeyCodes.FOUR),
       zero: kb.addKey(Phaser.Input.Keyboard.KeyCodes.ZERO),
       prev: kb.addKey(Phaser.Input.Keyboard.KeyCodes.OPEN_BRACKET),
       next: kb.addKey(Phaser.Input.Keyboard.KeyCodes.CLOSED_BRACKET),
@@ -213,6 +223,10 @@ export class InspectScene extends Phaser.Scene {
       this.showRacingLine = !this.showRacingLine;
       this.drawOverlay();
     }
+    if (Phaser.Input.Keyboard.JustDown(this.keys.four)) {
+      this.showReferenceOverlay = !this.showReferenceOverlay;
+      this.referenceOverlayImage?.setVisible(this.showReferenceOverlay);
+    }
     if (Phaser.Input.Keyboard.JustDown(this.keys.zero)) {
       this.fitView();
     }
@@ -222,6 +236,38 @@ export class InspectScene extends Phaser.Scene {
     if (Phaser.Input.Keyboard.JustDown(this.keys.next)) {
       this.cycleTrack(+1);
     }
+  }
+
+  private loadReferenceOverlay() {
+    if (!this.referenceOverlay) return;
+    const key = `overlay-${this.trackKey}`;
+    if (this.textures.exists(key)) {
+      this.placeReferenceOverlay(key);
+      return;
+    }
+    this.load.image(key, this.referenceOverlay.image);
+    this.load.once("filecomplete-image-" + key, () => this.placeReferenceOverlay(key));
+    this.load.once("loaderror", (file: Phaser.Loader.File) => {
+      if (file.key === key) {
+        console.warn(`reference overlay load failed: ${this.referenceOverlay?.image}`);
+      }
+    });
+    this.load.start();
+  }
+
+  private placeReferenceOverlay(key: string) {
+    if (!this.referenceOverlay) return;
+    const o = this.referenceOverlay;
+    const img = this.add
+      .image(o.x, o.y, key)
+      .setDepth(50)
+      .setAlpha(o.alpha ?? 0.35)
+      .setScale(o.scale)
+      .setVisible(this.showReferenceOverlay);
+    if (o.rotation) img.setRotation(o.rotation);
+    this.referenceOverlayImage = img;
+    this.worldObjects.push(img);
+    if (this.uiCam) this.uiCam.ignore(img);
   }
 
   private addUi<T extends Phaser.GameObjects.GameObject>(obj: T): T {

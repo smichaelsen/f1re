@@ -11,3 +11,5 @@ stadium-*.png
 prima-*.png
 temple-*.png
 shield-*.png
+# Reference track maps used in the inspector (potentially copyrighted; do not commit).
+public/inspect-overlays/
