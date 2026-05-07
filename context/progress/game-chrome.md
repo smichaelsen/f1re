@@ -7,7 +7,7 @@ Everything outside the track + physics + items: the framing, the HUD, the menus,
 ### Engine + bootstrap
 - Phaser 3 + TypeScript + Vite scaffold (port 5273 dev, 4273 preview).
 - BootScene generates car + pickup textures procedurally.
-- MenuScene with car select (RED/BLUE/YELLOW/GREEN) + track select + START + INSPECT.
+- MenuScene with car select (RED/BLUE/YELLOW/GREEN) + track select + difficulty (EASY/NORMAL/HARD) + laps (1-10) + opponents (1-7) counters + START + INSPECT. Difficulty maps to `DIFFICULTIES` table (perfRange for accel/grip/maxSpeed, skillRange for AI aim quality); RaceScene reads the settings from init data.
 - RaceScene state machine: countdown → racing → finished. ESC always returns to menu.
 
 ### Cars sprite

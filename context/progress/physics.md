@@ -7,6 +7,7 @@ Driving model, collisions, race-flow timing.
 ### Driving model
 - Top-down arcade physics: throttle, brake, steer, grip, drag, boost, spin, shield.
 - Per-frame surface feel: `RaceScene.surfaceFeel(car)` averages the surface under each of the 4 corners and passes `{ drag, grip }` to `car.update`.
+- **Subtle slipstream/draft.** `Car.draft` (default 1.0) multiplies accel and max speed. `RaceScene.computeDraft(car)` runs each frame: a chasing car within 20–110u behind a leader, ≤22u lateral, with heading dot ≥ 0.7, and speed ≥ 60 gets up to a +5% bump that ramps linearly with proximity and falls off with lateral offset. Tuned to be felt only on long straights when actually tucked into another car's wake.
 
 ### Collisions
 - OBB wall collision: corner-sampled push-back (4 corners; the worst-overflow normal is used).

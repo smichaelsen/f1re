@@ -3,11 +3,15 @@ import { Car, DEFAULT_CAR, SHIELD_COLOR, type CarInput, type SurfaceFeel } from 
 import { Track } from "../entities/Track";
 import { parseTrackData, SURFACE_PARAMS } from "../entities/TrackData";
 import { Hud, formatRaceTime, type PositionRow } from "../ui/Hud";
-import type { CarColor, TrackKey } from "./MenuScene";
+import { DIFFICULTIES, LAPS_MAX, LAPS_MIN, OPPONENTS_MAX, OPPONENTS_MIN } from "./MenuScene";
+import type { CarColor, Difficulty, TrackKey } from "./MenuScene";
 
 interface RaceInit {
   trackKey?: TrackKey;
   carColor?: CarColor;
+  difficulty?: Difficulty;
+  laps?: number;
+  opponents?: number;
 }
 
 const ALL_COLORS: CarColor[] = ["red", "blue", "yellow", "green"];
@@ -17,8 +21,6 @@ const COLOR_NAMES: Record<CarColor, string> = {
   yellow: "YEL",
   green: "GRN",
 };
-
-const TOTAL_LAPS = 3;
 const ITEMS = ["boost", "missile", "oil", "shield"] as const;
 type Item = (typeof ITEMS)[number];
 
@@ -84,6 +86,9 @@ export class RaceScene extends Phaser.Scene {
 
   trackKey: TrackKey = "oval";
   carColor: CarColor = "red";
+  difficulty: Difficulty = "normal";
+  totalLaps: number = 3;
+  opponentCount: number = 3;
   escapeKey!: Phaser.Input.Keyboard.Key;
   uiCam!: Phaser.Cameras.Scene2D.Camera;
 
@@ -94,6 +99,9 @@ export class RaceScene extends Phaser.Scene {
   init(data: RaceInit) {
     this.trackKey = data.trackKey ?? "oval";
     this.carColor = data.carColor ?? "red";
+    this.difficulty = data.difficulty ?? "normal";
+    this.totalLaps = Phaser.Math.Clamp(data.laps ?? 3, LAPS_MIN, LAPS_MAX);
+    this.opponentCount = Phaser.Math.Clamp(data.opponents ?? 3, OPPONENTS_MIN, OPPONENTS_MAX);
   }
 
   preload() {
@@ -128,26 +136,24 @@ export class RaceScene extends Phaser.Scene {
     this.player.heading = this.track.startHeading;
 
     const aiColors = ALL_COLORS.filter((c) => c !== this.carColor);
-    const grid = [
-      { dx: -40, dy: 30, color: aiColors[0] },
-      { dx: -80, dy: -30, color: aiColors[1] },
-      { dx: -120, dy: 30, color: aiColors[2] },
-    ];
-    for (const o of grid) {
-      const cos = Math.cos(this.track.startHeading);
-      const sin = Math.sin(this.track.startHeading);
-      const ax = this.track.startPos.x + cos * o.dx - sin * o.dy;
-      const ay = this.track.startPos.y + sin * o.dx + cos * o.dy;
-      const aiCar = new Car(this, ax, ay, `car_${o.color}`, COLOR_NAMES[o.color], false, {
+    const params = DIFFICULTIES[this.difficulty];
+    for (let i = 0; i < this.opponentCount; i++) {
+      const distBack = 40 + i * 40;
+      const lateral = i % 2 === 0 ? 30 : -30;
+      const slot = this.gridSlotBehindStart(distBack, lateral);
+      const color = aiColors[i % aiColors.length];
+      const [pLow, pHigh] = params.perfRange;
+      const [sLow, sHigh] = params.skillRange;
+      const aiCar = new Car(this, slot.x, slot.y, `car_${color}`, COLOR_NAMES[color], false, {
         ...DEFAULT_CAR,
-        maxSpeed: DEFAULT_CAR.maxSpeed * Phaser.Math.FloatBetween(0.92, 1.02),
-        accel: DEFAULT_CAR.accel * Phaser.Math.FloatBetween(0.92, 1.02),
-        grip: DEFAULT_CAR.grip * Phaser.Math.FloatBetween(0.92, 1.02),
+        maxSpeed: DEFAULT_CAR.maxSpeed * Phaser.Math.FloatBetween(pLow, pHigh),
+        accel: DEFAULT_CAR.accel * Phaser.Math.FloatBetween(pLow, pHigh),
+        grip: DEFAULT_CAR.grip * Phaser.Math.FloatBetween(pLow, pHigh),
       });
-      aiCar.heading = this.track.startHeading;
+      aiCar.heading = slot.heading;
       this.ai.push(aiCar);
       this.aiSkill.set(aiCar, {
-        skill: Phaser.Math.FloatBetween(0.4, 1.0),
+        skill: Phaser.Math.FloatBetween(sLow, sHigh),
         aimOffset: 0,
         chunk: -1,
       });
@@ -196,6 +202,63 @@ export class RaceScene extends Phaser.Scene {
     this.updateHud(now);
   }
 
+  // Subtle slipstream: when a car sits ~20-110u behind another car, roughly aligned and
+  // laterally close, give it a small accel + top-speed bump that ramps with proximity.
+  // Max effect at the close end of the range; zero at the edges or off-axis.
+  private computeDraft(car: Car): number {
+    if (car.spinTimer > 0 || car.speed < 60) return 1.0;
+    const fx = Math.cos(car.heading);
+    const fy = Math.sin(car.heading);
+    let best = 1.0;
+    for (const other of this.cars) {
+      if (other === car) continue;
+      if (other.spinTimer > 0) continue;
+      const dx = other.x - car.x;
+      const dy = other.y - car.y;
+      const along = dx * fx + dy * fy;
+      if (along < 20 || along > 110) continue;
+      const lat = Math.abs(-dx * fy + dy * fx);
+      if (lat > 22) continue;
+      const headingDot = Math.cos(other.heading - car.heading);
+      if (headingDot < 0.7) continue;
+      // Linear ramp: 1.0 at along=110, peak at along=20.
+      const proximity = 1 - (along - 20) / 90;
+      const lateralFalloff = 1 - lat / 22;
+      const draft = 1.0 + 0.05 * proximity * lateralFalloff;
+      if (draft > best) best = draft;
+    }
+    return best;
+  }
+
+  // Walks the centerline backward from the start index by `distBack` units of arc-length,
+  // then offsets laterally along the local normal. Keeps the grid on-track on curves.
+  private gridSlotBehindStart(distBack: number, lateral: number): { x: number; y: number; heading: number } {
+    const pts = this.track.centerline;
+    const n = pts.length;
+    let idx = this.track.startIndex;
+    let acc = 0;
+    let prev = idx;
+    while (acc < distBack) {
+      prev = (idx - 1 + n) % n;
+      const seg = Math.hypot(pts[idx].x - pts[prev].x, pts[idx].y - pts[prev].y);
+      if (acc + seg >= distBack) {
+        const t = seg > 0 ? (distBack - acc) / seg : 0;
+        const px = pts[idx].x + (pts[prev].x - pts[idx].x) * t;
+        const py = pts[idx].y + (pts[prev].y - pts[idx].y) * t;
+        const ux = (pts[idx].x - pts[prev].x) / (seg || 1);
+        const uy = (pts[idx].y - pts[prev].y) / (seg || 1);
+        return {
+          x: px + -uy * lateral,
+          y: py + ux * lateral,
+          heading: Math.atan2(uy, ux),
+        };
+      }
+      acc += seg;
+      idx = prev;
+    }
+    return { x: pts[idx].x, y: pts[idx].y, heading: this.track.startHeading };
+  }
+
   private runCountdown(now: number) {
     const elapsed = now - this.countdownStartedAt;
     if (elapsed < 1000) {
@@ -237,6 +300,8 @@ export class RaceScene extends Phaser.Scene {
           useItem: Phaser.Input.Keyboard.JustDown(this.spaceKey),
         }
       : NO_INPUT;
+    for (const c of this.cars) c.draft = this.computeDraft(c);
+
     this.player.update(dt, playerInput, this.surfaceFeel(this.player));
     if (playerActive && playerInput.useItem) this.useItem(this.player);
     this.applyTrackBounds(this.player);
@@ -631,7 +696,7 @@ export class RaceScene extends Phaser.Scene {
     car.lap++;
 
     const winnerAlreadyFinished = this.cars.some((c) => c.finishedAtMs != null);
-    if (car.lap >= TOTAL_LAPS || winnerAlreadyFinished) {
+    if (car.lap >= this.totalLaps || winnerAlreadyFinished) {
       car.finishedAtMs = now;
     }
   }
@@ -678,7 +743,7 @@ export class RaceScene extends Phaser.Scene {
 
       let timeCol: string;
       if (car.finishedAtMs == null) {
-        timeCol = `LAP ${Math.min(car.lap + 1, TOTAL_LAPS)}`;
+        timeCol = `LAP ${Math.min(car.lap + 1, this.totalLaps)}`;
       } else if (prevCar == null || prevCar.finishedAtMs == null) {
         timeCol = formatRaceTime(car.finishedAtMs - this.raceStartedAt);
       } else if (car.lap === prevCar.lap) {
@@ -716,7 +781,7 @@ export class RaceScene extends Phaser.Scene {
   private updateHud(now: number) {
     const speedKph = this.player.speed * 0.36;
     this.hud.setSpeed(speedKph);
-    this.hud.setLap(this.player.lap + 1, TOTAL_LAPS);
+    this.hud.setLap(this.player.lap + 1, this.totalLaps);
 
     const elapsed =
       this.state === "countdown"
@@ -727,7 +792,7 @@ export class RaceScene extends Phaser.Scene {
     this.hud.setTime(elapsed);
     this.hud.setBest(this.player.bestLapMs);
     this.hud.setItem(this.player.itemSlot);
-    this.hud.setPositions(this.computePositions(), TOTAL_LAPS);
+    this.hud.setPositions(this.computePositions(), this.totalLaps);
     this.hud.update();
   }
 }

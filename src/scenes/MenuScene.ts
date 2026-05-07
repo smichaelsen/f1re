@@ -2,6 +2,25 @@ import Phaser from "phaser";
 
 export type CarColor = "red" | "blue" | "yellow" | "green";
 export type TrackKey = "oval" | "stadium" | "temple-of-speed";
+export type Difficulty = "easy" | "normal" | "hard";
+
+export interface DifficultyParams {
+  // Multiplier ranges applied per AI on accel / grip / maxSpeed (relative to DEFAULT_CAR).
+  perfRange: [number, number];
+  // Aim-quality range. Higher skill → tighter racing line. See sampleAimOffset in RaceScene.
+  skillRange: [number, number];
+}
+
+export const DIFFICULTIES: Record<Difficulty, DifficultyParams> = {
+  easy:   { perfRange: [0.82, 0.92], skillRange: [0.15, 0.45] },
+  normal: { perfRange: [0.92, 1.02], skillRange: [0.40, 1.00] },
+  hard:   { perfRange: [0.98, 1.08], skillRange: [0.70, 1.00] },
+};
+
+export const LAPS_MIN = 1;
+export const LAPS_MAX = 10;
+export const OPPONENTS_MIN = 1;
+export const OPPONENTS_MAX = 7;
 
 const COLORS: { key: CarColor; hex: number; label: string }[] = [
   { key: "red", hex: 0xe10600, label: "RED" },
@@ -16,14 +35,32 @@ const TRACKS: { key: TrackKey; label: string; sub: string }[] = [
   { key: "temple-of-speed", label: "TEMPLE OF SPEED", sub: "chicanes & flat-out straights" },
 ];
 
+const DIFFICULTY_BUTTONS: { key: Difficulty; label: string }[] = [
+  { key: "easy", label: "EASY" },
+  { key: "normal", label: "NORMAL" },
+  { key: "hard", label: "HARD" },
+];
+
 export const TRACK_KEYS: TrackKey[] = TRACKS.map((t) => t.key);
+
+interface CounterButtons {
+  dec: Phaser.GameObjects.Text;
+  inc: Phaser.GameObjects.Text;
+  value: Phaser.GameObjects.Text;
+}
 
 export class MenuScene extends Phaser.Scene {
   selectedColor: CarColor = "red";
   selectedTrack: TrackKey = "oval";
+  selectedDifficulty: Difficulty = "normal";
+  laps: number = 3;
+  opponents: number = 3;
 
   colorButtons: { key: CarColor; rect: Phaser.GameObjects.Rectangle }[] = [];
   trackButtons: { key: TrackKey; bg: Phaser.GameObjects.Rectangle; label: Phaser.GameObjects.Text; sub: Phaser.GameObjects.Text }[] = [];
+  difficultyButtons: { key: Difficulty; bg: Phaser.GameObjects.Rectangle; label: Phaser.GameObjects.Text }[] = [];
+  lapsCounter!: CounterButtons;
+  opponentsCounter!: CounterButtons;
   startBtn!: Phaser.GameObjects.Text;
   inspectBtn!: Phaser.GameObjects.Text;
   hintText!: Phaser.GameObjects.Text;
@@ -35,6 +72,7 @@ export class MenuScene extends Phaser.Scene {
   create() {
     this.colorButtons = [];
     this.trackButtons = [];
+    this.difficultyButtons = [];
 
     const cam = this.cameras.main;
     const cx = cam.width / 2;
@@ -132,8 +170,52 @@ export class MenuScene extends Phaser.Scene {
       tx += tw + tgap;
     }
 
+    this.add
+      .text(cx, 575, "DIFFICULTY", {
+        fontFamily: "system-ui, sans-serif",
+        fontSize: "20px",
+        color: "#888888",
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5);
+
+    const dw = 130;
+    const dh = 44;
+    const dgap = 16;
+    const diffTotalW = DIFFICULTY_BUTTONS.length * dw + (DIFFICULTY_BUTTONS.length - 1) * dgap;
+    let dx = cx - diffTotalW / 2 + dw / 2;
+    for (const d of DIFFICULTY_BUTTONS) {
+      const bg = this.add
+        .rectangle(dx, 620, dw, dh, 0x222222)
+        .setStrokeStyle(3, 0x444444)
+        .setInteractive({ useHandCursor: true });
+      const label = this.add
+        .text(dx, 620, d.label, {
+          fontFamily: "system-ui, sans-serif",
+          fontSize: "18px",
+          color: "#ffffff",
+          fontStyle: "bold",
+        })
+        .setOrigin(0.5);
+      bg.on("pointerdown", () => {
+        this.selectedDifficulty = d.key;
+        this.refresh();
+      });
+      this.difficultyButtons.push({ key: d.key, bg, label });
+      dx += dw + dgap;
+    }
+
+    this.lapsCounter = this.makeCounter(cx - 180, 695, "LAPS", () => this.laps, (v) => {
+      this.laps = Phaser.Math.Clamp(v, LAPS_MIN, LAPS_MAX);
+      this.refresh();
+    });
+    this.opponentsCounter = this.makeCounter(cx + 180, 695, "OPPONENTS", () => this.opponents, (v) => {
+      this.opponents = Phaser.Math.Clamp(v, OPPONENTS_MIN, OPPONENTS_MAX);
+      this.refresh();
+    });
+
     this.startBtn = this.add
-      .text(cx, 620, "START RACE", {
+      .text(cx, 770, "START RACE", {
         fontFamily: "system-ui, sans-serif",
         fontSize: "32px",
         color: "#1a1a1a",
@@ -148,7 +230,7 @@ export class MenuScene extends Phaser.Scene {
     this.startBtn.on("pointerout", () => this.startBtn.setStyle({ backgroundColor: "#ffd24a" }));
 
     this.inspectBtn = this.add
-      .text(cx, 700, "INSPECT TRACK", {
+      .text(cx, 840, "INSPECT TRACK", {
         fontFamily: "system-ui, sans-serif",
         fontSize: "16px",
         color: "#888888",
@@ -187,12 +269,70 @@ export class MenuScene extends Phaser.Scene {
       b.bg.setFillStyle(selected ? 0x2a2a2a : 0x1d1d1d);
       b.label.setColor(selected ? "#ffd24a" : "#ffffff");
     }
+    for (const b of this.difficultyButtons) {
+      const selected = b.key === this.selectedDifficulty;
+      b.bg.setStrokeStyle(selected ? 4 : 3, selected ? 0xffd24a : 0x444444);
+      b.bg.setFillStyle(selected ? 0x2a2a2a : 0x1d1d1d);
+      b.label.setColor(selected ? "#ffd24a" : "#ffffff");
+    }
+    this.lapsCounter?.value.setText(String(this.laps));
+    this.opponentsCounter?.value.setText(String(this.opponents));
+  }
+
+  private makeCounter(
+    cx: number,
+    y: number,
+    label: string,
+    getValue: () => number,
+    setValue: (v: number) => void,
+  ): CounterButtons {
+    this.add
+      .text(cx, y - 28, label, {
+        fontFamily: "system-ui, sans-serif",
+        fontSize: "16px",
+        color: "#888888",
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5);
+
+    const btnStyle = {
+      fontFamily: "system-ui, sans-serif",
+      fontSize: "26px",
+      color: "#ffffff",
+      backgroundColor: "#2a2a2a",
+      padding: { x: 14, y: 6 },
+      fontStyle: "bold" as const,
+    };
+    const dec = this.add
+      .text(cx - 60, y, "−", btnStyle)
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    const inc = this.add
+      .text(cx + 60, y, "+", btnStyle)
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    const value = this.add
+      .text(cx, y, String(getValue()), {
+        fontFamily: "system-ui, sans-serif",
+        fontSize: "24px",
+        color: "#ffd24a",
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5);
+
+    dec.on("pointerdown", () => setValue(getValue() - 1));
+    inc.on("pointerdown", () => setValue(getValue() + 1));
+
+    return { dec, inc, value };
   }
 
   private start() {
     this.scene.start("RaceScene", {
       trackKey: this.selectedTrack,
       carColor: this.selectedColor,
+      difficulty: this.selectedDifficulty,
+      laps: this.laps,
+      opponents: this.opponents,
     });
   }
 

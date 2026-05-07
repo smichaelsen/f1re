@@ -280,8 +280,12 @@ export class Track {
   }
 
   private drawApexKerbs(g: Phaser.GameObjects.Graphics, trackHalf: number, stripe: number) {
-    const inner = this.offsetLoop(trackHalf);
-    const innerCut = this.offsetLoop(trackHalf - stripe);
+    // Two candidate kerb strips, one per side of centerline. Per-point sign of curvature
+    // picks which side to use, so chicane bends turning either way both get kerbs.
+    const sides = {
+      pos: { inner: this.offsetLoop(trackHalf), cut: this.offsetLoop(trackHalf - stripe) },
+      neg: { inner: this.offsetLoop(-trackHalf), cut: this.offsetLoop(-(trackHalf - stripe)) },
+    };
     const curvatures = this.computeCurvatures();
     const n = curvatures.length;
 
@@ -290,23 +294,28 @@ export class Track {
 
     let stripeIdx = -1;
     let inApex = false;
+    let lastSign = 0;
     for (let i = 0; i < n; i++) {
-      const isApex = Math.abs(curvatures[i]) >= threshold;
+      const c = curvatures[i];
+      const sign = c >= 0 ? 1 : -1;
+      const isApex = Math.abs(c) >= threshold;
       if (isApex) {
-        if (!inApex) {
+        if (!inApex || sign !== lastSign) {
           stripeIdx = 0;
           inApex = true;
+          lastSign = sign;
         } else {
           stripeIdx++;
         }
         const j = (i + 1) % n;
         const color = stripeIdx % 2 === 0 ? 0xcc1010 : 0xffffff;
+        const { inner, cut } = sign > 0 ? sides.pos : sides.neg;
         g.fillStyle(color, 1);
         g.beginPath();
-        g.moveTo(innerCut[i].x, innerCut[i].y);
+        g.moveTo(cut[i].x, cut[i].y);
         g.lineTo(inner[i].x, inner[i].y);
         g.lineTo(inner[j].x, inner[j].y);
-        g.lineTo(innerCut[j].x, innerCut[j].y);
+        g.lineTo(cut[j].x, cut[j].y);
         g.closePath();
         g.fillPath();
       } else {

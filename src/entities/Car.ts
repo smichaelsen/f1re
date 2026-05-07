@@ -41,6 +41,8 @@ export class Car {
   boostTimer = 0;
   spinTimer = 0;
   shielded = false;
+  // Slipstream multiplier applied to accel + max speed. 1.0 = no draft. Set per-frame by RaceScene.
+  draft = 1.0;
   itemSlot: string | null = null;
   useItemAt: number | null = null;
 
@@ -114,8 +116,8 @@ export class Car {
 
       const boost = this.boostTimer > 0 ? 1.6 : 1.0;
       if (input.throttle > 0) {
-        this.vx += fx * cfg.accel * input.throttle * boost * dt;
-        this.vy += fy * cfg.accel * input.throttle * boost * dt;
+        this.vx += fx * cfg.accel * input.throttle * boost * this.draft * dt;
+        this.vy += fy * cfg.accel * input.throttle * boost * this.draft * dt;
       }
       if (input.brake > 0) {
         const forwardDot = this.vx * fx + this.vy * fy;
@@ -142,7 +144,7 @@ export class Car {
       this.vx *= dragFactor;
       this.vy *= dragFactor;
 
-      const maxV = cfg.maxSpeed * boost;
+      const maxV = cfg.maxSpeed * boost * this.draft;
       const sp = this.speed;
       if (sp > maxV) {
         this.vx = (this.vx / sp) * maxV;

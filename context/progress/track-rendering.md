@@ -9,7 +9,7 @@ How tracks are drawn from JSON, plus the surface lookup that drives physics.
 - Polygon patches over the runoff band.
 - Dark wall stripes at runoff outer edges (4px).
 - White track-edge lines at both asphalt edges (2px), drawn over walls so they're always visible.
-- Apex kerbs (red/white) auto-detected from curvature, drawn last over the inside white line at corners.
+- Apex kerbs (red/white) auto-detected from curvature, drawn last over the inside white line at corners. Sign of curvature picks the side per point, so chicane bends turning either way both get kerbs.
 - Centerline dashes, start/finish checker stripe, world grass background.
 
 ### Surface system — Phase 1
