@@ -49,6 +49,16 @@ interface Missile {
   expiresAt: number;
 }
 
+interface AISkillState {
+  skill: number;
+  aimOffset: number;
+  chunk: number;
+}
+
+const AIM_CHUNK_SIZE = 6;
+const AIM_OFFSET_FLOOR = 0.05;
+const AIM_OFFSET_RANGE = 0.5;
+
 const NO_INPUT: CarInput = { throttle: 0, brake: 0, steer: 0, useItem: false };
 
 export class RaceScene extends Phaser.Scene {
@@ -64,6 +74,8 @@ export class RaceScene extends Phaser.Scene {
   pickups: Pickup[] = [];
   oilSlicks: OilSlick[] = [];
   missiles: Missile[] = [];
+
+  private aiSkill = new Map<Car, AISkillState>();
 
   state: RaceState = "countdown";
   countdownStartedAt = 0;
@@ -97,6 +109,7 @@ export class RaceScene extends Phaser.Scene {
     this.pickups = [];
     this.oilSlicks = [];
     this.missiles = [];
+    this.aiSkill.clear();
     this.state = "countdown";
     this.raceStartedAt = 0;
     this.raceEndedAt = 0;
@@ -131,6 +144,11 @@ export class RaceScene extends Phaser.Scene {
       });
       aiCar.heading = this.track.startHeading;
       this.ai.push(aiCar);
+      this.aiSkill.set(aiCar, {
+        skill: Phaser.Math.FloatBetween(0.4, 1.0),
+        aimOffset: 0,
+        chunk: -1,
+      });
     }
     this.cars = [this.player, ...this.ai];
 
@@ -328,7 +346,35 @@ export class RaceScene extends Phaser.Scene {
       if (d < bestDist) { bestDist = d; bestIdx = i; }
     }
     const lookahead = 4;
-    return pts[(bestIdx + lookahead) % pts.length];
+    const aimIdx = (bestIdx + lookahead) % pts.length;
+    const aim = pts[aimIdx];
+
+    const state = this.aiSkill.get(ai);
+    if (!state) return aim;
+
+    const currentChunk = Math.floor(bestIdx / AIM_CHUNK_SIZE);
+    if (currentChunk !== state.chunk) {
+      state.chunk = currentChunk;
+      state.aimOffset = this.sampleAimOffset(state.skill);
+    }
+    if (state.aimOffset === 0) return aim;
+
+    const n = pts.length;
+    const prev = pts[(aimIdx - 1 + n) % n];
+    const next = pts[(aimIdx + 1) % n];
+    const dx = next.x - prev.x;
+    const dy = next.y - prev.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len;
+    const ny = dx / len;
+    return { x: aim.x + nx * state.aimOffset, y: aim.y + ny * state.aimOffset };
+  }
+
+  private sampleAimOffset(skill: number): number {
+    const halfWidth = this.track.width / 2;
+    const maxOff = halfWidth * (AIM_OFFSET_FLOOR + (1 - skill) * AIM_OFFSET_RANGE);
+    const r = Math.random() - Math.random();
+    return r * maxOff;
   }
 
   private spawnPickups(count: number) {
