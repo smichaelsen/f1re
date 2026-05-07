@@ -1,0 +1,10 @@
+node_modules
+dist
+.DS_Store
+*.log
+.vite
+.playwright-mcp/
+f1re-*.png
+menu.png
+race-*.png
+stadium-*.png
