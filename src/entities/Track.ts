@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import {
   SURFACE_PARAMS,
+  type RacingLineOverrides,
   type RunoffSide,
   type Surface,
   type SurfacePatch,
@@ -33,6 +34,9 @@ const WORLD_GRASS = 0x2a6f2a;
 const WALL_COLOR = 0x111111;
 const TRACK_EDGE_LINE = 0xffffff;
 
+const RACING_LINE_ITERATIONS = 200;
+const RACING_LINE_MARGIN = 22;
+
 export class Track {
   scene: Phaser.Scene;
   name: string;
@@ -49,6 +53,8 @@ export class Track {
   patches: SurfacePatch[];
   outsidePatches: SurfacePatch[] = [];
   insidePatches: SurfacePatch[] = [];
+  racingLine: TrackPoint[] = [];
+  racingLineOffsets: number[] = [];
 
   constructor(scene: Phaser.Scene, data: TrackData) {
     this.scene = scene;
@@ -73,10 +79,74 @@ export class Track {
       else this.insidePatches.push(p);
     }
 
+    this.computeRacingLine(data.racingLineOverrides);
+
     this.graphics = scene.add.graphics();
     this.graphics.setDepth(0);
     this.draw();
     this.buildCheckpoints();
+  }
+
+  /**
+   * Iterative minimum-curvature solver: at each centerline point, store a perpendicular
+   * offset that pulls the point onto the chord between its smoothed neighbors. Hints from
+   * `racingLineOverrides` act as soft constraints inside the loop.
+   */
+  private computeRacingLine(overrides?: RacingLineOverrides) {
+    const pts = this.centerline;
+    const n = pts.length;
+    if (n < 3) return;
+
+    const halfWidth = this.width / 2;
+    const maxOff = Math.max(0, halfWidth - RACING_LINE_MARGIN);
+
+    const normals: { x: number; y: number }[] = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const prev = pts[(i - 1 + n) % n];
+      const next = pts[(i + 1) % n];
+      const dx = next.x - prev.x;
+      const dy = next.y - prev.y;
+      const len = Math.hypot(dx, dy) || 1;
+      normals[i] = { x: -dy / len, y: dx / len };
+    }
+
+    const hintMap = new Map<number, { offset: number; strength: number }>();
+    const hints = overrides?.hints ?? [];
+    for (const h of hints) {
+      const idx = ((h.index % n) + n) % n;
+      hintMap.set(idx, { offset: h.offset, strength: h.strength ?? 1 });
+    }
+
+    const offsets = new Array<number>(n).fill(0);
+    for (const [idx, h] of hintMap) {
+      offsets[idx] = clamp(h.offset, -maxOff, maxOff);
+    }
+
+    for (let iter = 0; iter < RACING_LINE_ITERATIONS; iter++) {
+      for (let i = 0; i < n; i++) {
+        const ip = (i - 1 + n) % n;
+        const inx = (i + 1) % n;
+        const prevX = pts[ip].x + offsets[ip] * normals[ip].x;
+        const prevY = pts[ip].y + offsets[ip] * normals[ip].y;
+        const nextX = pts[inx].x + offsets[inx] * normals[inx].x;
+        const nextY = pts[inx].y + offsets[inx] * normals[inx].y;
+        const midX = (prevX + nextX) / 2;
+        const midY = (prevY + nextY) / 2;
+        let t =
+          (midX - pts[i].x) * normals[i].x + (midY - pts[i].y) * normals[i].y;
+
+        const hint = hintMap.get(i);
+        if (hint) t = (1 - hint.strength) * t + hint.strength * hint.offset;
+
+        offsets[i] = clamp(t, -maxOff, maxOff);
+      }
+    }
+
+    this.racingLineOffsets = offsets;
+    this.racingLine = offsets.map((off, i) => ({
+      x: pts[i].x + off * normals[i].x,
+      y: pts[i].y + off * normals[i].y,
+    }));
   }
 
   static fromData(scene: Phaser.Scene, data: TrackData): Track {
@@ -379,6 +449,10 @@ export class Track {
     if (Math.abs(lx) >= 30) return false;
     return ly >= -cp.outsideHalf && ly <= cp.insideHalf;
   }
+}
+
+function clamp(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v;
 }
 
 function polygonCentroid(poly: TrackPoint[]): TrackPoint {

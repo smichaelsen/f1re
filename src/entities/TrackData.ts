@@ -20,6 +20,22 @@ export interface SurfacePatch {
   polygon: TrackPoint[];
 }
 
+/**
+ * Soft constraint applied during racing-line solving.
+ * `index` is a centerline point index (wraps modulo length).
+ * `offset` is in pixels, perpendicular to the centerline; positive = inside (toward loop centroid).
+ * `strength` ∈ [0, 1] blends between the solver's unconstrained step (0) and the hinted offset (1).
+ */
+export interface RacingLineHint {
+  index: number;
+  offset: number;
+  strength?: number;
+}
+
+export interface RacingLineOverrides {
+  hints?: RacingLineHint[];
+}
+
 export interface TrackData {
   version: 1 | 2;
   name: string;
@@ -30,6 +46,7 @@ export interface TrackData {
   startIndex: number;
   runoff: { outside: RunoffSide; inside: RunoffSide };
   patches: SurfacePatch[];
+  racingLineOverrides?: RacingLineOverrides;
 }
 
 export class TrackDataError extends Error {}
@@ -63,6 +80,7 @@ export function parseTrackData(raw: unknown): TrackData {
 
   const runoff = parseRunoff(d.runoff);
   const patches = parsePatches(d.patches);
+  const racingLineOverrides = parseRacingLineOverrides(d.racingLineOverrides);
 
   return {
     version,
@@ -74,7 +92,35 @@ export function parseTrackData(raw: unknown): TrackData {
     startIndex,
     runoff,
     patches,
+    racingLineOverrides,
   };
+}
+
+function parseRacingLineOverrides(raw: unknown): RacingLineOverrides | undefined {
+  if (raw == null) return undefined;
+  if (typeof raw !== "object")
+    throw new TrackDataError("racingLineOverrides must be an object");
+  const r = raw as Record<string, unknown>;
+  const hints: RacingLineHint[] = [];
+  if (r.hints !== undefined) {
+    if (!Array.isArray(r.hints))
+      throw new TrackDataError("racingLineOverrides.hints must be an array");
+    r.hints.forEach((h, i) => {
+      if (!h || typeof h !== "object")
+        throw new TrackDataError(`racingLineOverrides.hints[${i}] must be an object`);
+      const hh = h as Record<string, unknown>;
+      if (typeof hh.index !== "number" || hh.index < 0)
+        throw new TrackDataError(
+          `racingLineOverrides.hints[${i}].index must be a non-negative number`,
+        );
+      if (typeof hh.offset !== "number")
+        throw new TrackDataError(`racingLineOverrides.hints[${i}].offset must be a number`);
+      const strength =
+        typeof hh.strength === "number" ? Math.max(0, Math.min(1, hh.strength)) : 1;
+      hints.push({ index: Math.floor(hh.index), offset: hh.offset, strength });
+    });
+  }
+  return { hints };
 }
 
 function parsePoint(raw: unknown, label: string): TrackPoint {

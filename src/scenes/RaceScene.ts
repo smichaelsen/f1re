@@ -341,6 +341,7 @@ export class RaceScene extends Phaser.Scene {
 
   private aimNextCenterline(ai: Car) {
     const pts = this.track.centerline;
+    const rl = this.track.racingLine.length === pts.length ? this.track.racingLine : pts;
     let bestIdx = 0;
     let bestDist = Infinity;
     for (let i = 0; i < pts.length; i++) {
@@ -349,7 +350,7 @@ export class RaceScene extends Phaser.Scene {
     }
     const lookahead = 4;
     const aimIdx = (bestIdx + lookahead) % pts.length;
-    const aim = pts[aimIdx];
+    const aim = rl[aimIdx];
 
     const state = this.aiSkill.get(ai);
     if (!state) return aim;

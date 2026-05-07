@@ -53,6 +53,7 @@ export class InspectScene extends Phaser.Scene {
 
   showPoints = true;
   showCheckpoints = true;
+  showRacingLine = true;
 
   overUi = false;
   isDragging = false;
@@ -63,6 +64,7 @@ export class InspectScene extends Phaser.Scene {
     esc: Phaser.Input.Keyboard.Key;
     one: Phaser.Input.Keyboard.Key;
     two: Phaser.Input.Keyboard.Key;
+    three: Phaser.Input.Keyboard.Key;
     zero: Phaser.Input.Keyboard.Key;
     prev: Phaser.Input.Keyboard.Key;
     next: Phaser.Input.Keyboard.Key;
@@ -121,7 +123,7 @@ export class InspectScene extends Phaser.Scene {
       this.add.text(
         20,
         this.scale.height - 30,
-        "drag pan · wheel/buttons zoom · 0 fit · 1 points · 2 checkpoints · [ ] track · ESC menu",
+        "drag pan · wheel/buttons zoom · 0 fit · 1 points · 2 checkpoints · 3 racing line · [ ] track · ESC menu",
         { ...HUD_STYLE, fontSize: "13px", color: "#aaaaaa" },
       ),
     );
@@ -146,6 +148,7 @@ export class InspectScene extends Phaser.Scene {
       esc: kb.addKey(Phaser.Input.Keyboard.KeyCodes.ESC),
       one: kb.addKey(Phaser.Input.Keyboard.KeyCodes.ONE),
       two: kb.addKey(Phaser.Input.Keyboard.KeyCodes.TWO),
+      three: kb.addKey(Phaser.Input.Keyboard.KeyCodes.THREE),
       zero: kb.addKey(Phaser.Input.Keyboard.KeyCodes.ZERO),
       prev: kb.addKey(Phaser.Input.Keyboard.KeyCodes.OPEN_BRACKET),
       next: kb.addKey(Phaser.Input.Keyboard.KeyCodes.CLOSED_BRACKET),
@@ -204,6 +207,10 @@ export class InspectScene extends Phaser.Scene {
     }
     if (Phaser.Input.Keyboard.JustDown(this.keys.two)) {
       this.showCheckpoints = !this.showCheckpoints;
+      this.drawOverlay();
+    }
+    if (Phaser.Input.Keyboard.JustDown(this.keys.three)) {
+      this.showRacingLine = !this.showRacingLine;
       this.drawOverlay();
     }
     if (Phaser.Input.Keyboard.JustDown(this.keys.zero)) {
@@ -282,6 +289,25 @@ export class InspectScene extends Phaser.Scene {
       t.destroy();
     }
     this.labels = [];
+
+    if (this.showRacingLine && this.track.racingLine.length === this.track.centerline.length) {
+      const rl = this.track.racingLine;
+      const cl = this.track.centerline;
+      const arrowStride = Math.max(1, Math.floor(rl.length / 48));
+      this.overlay.lineStyle(1, 0x00aaaa, 0.45);
+      for (let i = 0; i < rl.length; i += arrowStride) {
+        this.overlay.beginPath();
+        this.overlay.moveTo(cl[i].x, cl[i].y);
+        this.overlay.lineTo(rl[i].x, rl[i].y);
+        this.overlay.strokePath();
+      }
+      this.overlay.lineStyle(2, 0x00ffff, 0.95);
+      this.overlay.beginPath();
+      this.overlay.moveTo(rl[0].x, rl[0].y);
+      for (let i = 1; i < rl.length; i++) this.overlay.lineTo(rl[i].x, rl[i].y);
+      this.overlay.closePath();
+      this.overlay.strokePath();
+    }
 
     if (this.showPoints) {
       this.overlay.fillStyle(0xffd24a, 1);
