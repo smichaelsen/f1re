@@ -81,6 +81,12 @@ Update this file after every meaningful implementation change.
 - F1-style open-wheel sprite (44×20): rounded chassis, 4 corner wheels with silver hubs, sidepods, cockpit + helmet, front/rear wings.
 - 4 colour variants generated procedurally.
 
+### Shield visibility
+- Pulsing cyan ring (`Car.SHIELD_COLOR = 0x88ccff`) drawn around any car with `shielded = true`. Sin-based alpha pulse (0.45–0.85), 26px radius, drawn on a per-car `shieldRing` Graphics owned by `Car`.
+- `Car.spin(seconds)` now returns `boolean` — `false` when the hit was absorbed by the shield. Existing missile + oil collision paths consume the return.
+- `RaceScene.spawnShieldFlash(car)` plays a one-shot expanding cyan ring (r 18→56, alpha 1→0, stroke 4→1, ease cubic-out, 380ms) at the car position; player gets a "BLOCKED!" HUD flash.
+- `uiCam.ignore(g)` applied to the runtime flash graphics so it lives in the world, not the HUD layer.
+
 ### Camera polish
 - World camera zoom dropped from 0.9 → 0.85 for a wider preview of the upcoming track.
 - Velocity look-ahead via `cameras.main.setFollowOffset(-vx*k, -vy*k)` per racing frame, with `k = 0.35` and a `±220` clamp so spin doesn't whip the camera. Phaser's existing 0.12 lerp on `startFollow` smooths the offset transition.

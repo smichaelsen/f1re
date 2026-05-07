@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { Car, DEFAULT_CAR, type CarInput, type SurfaceFeel } from "../entities/Car";
+import { Car, DEFAULT_CAR, SHIELD_COLOR, type CarInput, type SurfaceFeel } from "../entities/Car";
 import { Track } from "../entities/Track";
 import { parseTrackData, SURFACE_PARAMS } from "../entities/TrackData";
 import { Hud, formatRaceTime, type PositionRow } from "../ui/Hud";
@@ -455,7 +455,7 @@ export class RaceScene extends Phaser.Scene {
         if (m.ownerIsPlayer && c.isPlayer) continue;
         if (!m.ownerIsPlayer && !c.isPlayer) continue;
         if (Phaser.Math.Distance.Between(c.x, c.y, m.x, m.y) < 22) {
-          c.spin(1.2);
+          if (!c.spin(1.2)) this.spawnShieldFlash(c);
           hit = true;
           break;
         }
@@ -495,13 +495,38 @@ export class RaceScene extends Phaser.Scene {
       }
       for (const c of this.cars) {
         if (Phaser.Math.Distance.Between(c.x, c.y, o.x, o.y) < 22) {
-          c.spin(0.9);
+          if (!c.spin(0.9)) this.spawnShieldFlash(c);
           o.sprite.destroy();
           this.oilSlicks.splice(i, 1);
           break;
         }
       }
     }
+  }
+
+  private spawnShieldFlash(car: Car) {
+    const g = this.add.graphics();
+    g.setDepth(9);
+    this.uiCam.ignore(g);
+    const cx = car.x;
+    const cy = car.y;
+    const state = { r: 18, w: 4, a: 1 };
+    this.tweens.add({
+      targets: state,
+      r: 56,
+      w: 1,
+      a: 0,
+      duration: 380,
+      ease: "Cubic.easeOut",
+      onUpdate: () => {
+        g.clear();
+        g.lineStyle(state.w, SHIELD_COLOR, state.a);
+        g.strokeCircle(0, 0, state.r);
+        g.setPosition(cx, cy);
+      },
+      onComplete: () => g.destroy(),
+    });
+    if (car.isPlayer) this.hud.flash("BLOCKED!", 600);
   }
 
   private handleCarCollisions() {

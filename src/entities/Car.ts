@@ -27,9 +27,12 @@ export const DEFAULT_CAR: CarConfig = {
 
 const DEFAULT_FEEL: SurfaceFeel = { drag: 0.6, grip: 4.0 };
 
+export const SHIELD_COLOR = 0x88ccff;
+
 export class Car {
   scene: Phaser.Scene;
   sprite: Phaser.GameObjects.Sprite;
+  shieldRing: Phaser.GameObjects.Graphics;
   vx = 0;
   vy = 0;
   heading = 0;
@@ -67,6 +70,9 @@ export class Car {
     this.isPlayer = isPlayer;
     this.sprite = scene.add.sprite(x, y, textureKey);
     this.sprite.setDepth(10);
+    this.shieldRing = scene.add.graphics();
+    this.shieldRing.setDepth(11);
+    this.shieldRing.setVisible(false);
   }
 
   get x() { return this.sprite.x; }
@@ -149,6 +155,23 @@ export class Car {
     this.sprite.x += this.vx * dt;
     this.sprite.y += this.vy * dt;
     this.sprite.rotation = this.heading;
+
+    this.updateShieldRing();
+  }
+
+  private updateShieldRing() {
+    const g = this.shieldRing;
+    if (!this.shielded) {
+      if (g.visible) g.setVisible(false);
+      return;
+    }
+    if (!g.visible) g.setVisible(true);
+    const now = this.scene.time.now;
+    const pulse = 0.45 + 0.4 * (0.5 + 0.5 * Math.sin(now / 180));
+    g.clear();
+    g.lineStyle(3, SHIELD_COLOR, pulse);
+    g.strokeCircle(0, 0, 26);
+    g.setPosition(this.x, this.y);
   }
 
   applyImpulse(ix: number, iy: number) {
@@ -156,12 +179,13 @@ export class Car {
     this.vy += iy;
   }
 
-  spin(seconds = 1.0) {
+  spin(seconds = 1.0): boolean {
     if (this.shielded) {
       this.shielded = false;
-      return;
+      return false;
     }
     this.spinTimer = seconds;
+    return true;
   }
 
   giveBoost(seconds = 2.0) {

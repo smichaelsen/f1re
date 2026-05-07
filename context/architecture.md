@@ -21,7 +21,7 @@
 - `src/scenes/InspectScene.ts` — read-only track viewer: two-camera split (world + UI), pan/zoom, point + checkpoint overlays.
 - `src/entities/Track.ts` — track rendering (concentric runoff bands, wall stripes, white edge lines, apex kerbs, dashes, start stripe), centerline probe with side detection, surface lookup, wall offsets, checkpoint geometry.
 - `src/entities/TrackData.ts` — JSON schema (versions 1 & 2), parser/validator (`parseTrackData`), surface catalog (`SURFACE_PARAMS`).
-- `src/entities/Car.ts` — car physics (throttle, brake, steer, grip, drag, boost, spin, shield), OBB corner geometry, sprite + heading.
+- `src/entities/Car.ts` — car physics (throttle, brake, steer, grip, drag, boost, spin, shield), OBB corner geometry, sprite + heading. Owns a `shieldRing` Graphics that's drawn each frame whenever `shielded = true`. `spin()` returns `false` when the hit was absorbed by the shield.
 - `src/ui/Hud.ts` — scene-local HUD: speed/lap/time/best/item readouts, position panel, countdown, message flash, results overlay (compact corner mode + full center mode). Exposes `objects: GameObject[]` so the host scene can wire two-camera ignore lists in one place.
 - `src/types.ts` — small shared types (`CarConfig`, `Vec2`, etc.).
 - `public/tracks/*.json` — track data files, loaded via Phaser's JSON loader at scene start.

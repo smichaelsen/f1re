@@ -33,6 +33,7 @@ All in-game colours are defined as numeric constants near where they are used. T
 | Inspector point markers  | `InspectScene` `LABEL_STYLE.color`       | `#ffd24a` |                                              |
 | Inspector checkpoint     | `InspectScene` `CP_LABEL_STYLE.color`    | `#00ffaa` | Mint cyan for CP markers + labels           |
 | Inspector coords readout | `InspectScene`                           | `#88ccff` | Sky blue for cursor-coords                  |
+| Shield ring + flash      | `Car.SHIELD_COLOR`                       | `0x88ccff` | Cyan ring around shielded cars; expanding ring + fade when a hit is absorbed |
 
 When adding a new surface or visual element, define the colour as a named constant near the existing surface params, not inline at the call site. Inline hex is acceptable for one-off graphics primitives (a stripe, a single overlay).
 
