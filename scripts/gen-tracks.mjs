@@ -92,6 +92,110 @@ function round(n) {
   return Math.round(n * 100) / 100;
 }
 
+function arcOutsidePatch(cx, cy, r, asphaltHalf, runoff, a0, a1, samples = 16, gap = 3) {
+  const inner = r + asphaltHalf + gap;
+  const outer = r + asphaltHalf + runoff - gap;
+  const pts = [];
+  for (let i = 0; i <= samples; i++) {
+    const a = a0 + (a1 - a0) * (i / samples);
+    pts.push({ x: round(cx + Math.cos(a) * inner), y: round(cy + Math.sin(a) * inner) });
+  }
+  for (let i = samples; i >= 0; i--) {
+    const a = a0 + (a1 - a0) * (i / samples);
+    pts.push({ x: round(cx + Math.cos(a) * outer), y: round(cy + Math.sin(a) * outer) });
+  }
+  return pts;
+}
+
+function chicaneApexInsidePatch(ax, ay, bx, by, peakOff, apexT, halfSpanT, asphaltHalf, runoff, samples = 10, gap = 3) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len = Math.hypot(dx, dy);
+  const ux = dx / len;
+  const uy = dy / len;
+  const nx = -uy;
+  const ny = ux;
+  const apexLat = peakOff * Math.sin(apexT * 2 * Math.PI);
+  const insideSign = apexLat >= 0 ? -1 : 1;
+  const t0 = Math.max(0.001, apexT - halfSpanT);
+  const t1 = Math.min(0.999, apexT + halfSpanT);
+  const inner = asphaltHalf + gap;
+  const outer = asphaltHalf + runoff - gap;
+  const pts = [];
+  for (let i = 0; i <= samples; i++) {
+    const t = t0 + (t1 - t0) * (i / samples);
+    const along = t * len;
+    const lat = peakOff * Math.sin(t * 2 * Math.PI);
+    const cxc = ax + ux * along + nx * lat;
+    const cyc = ay + uy * along + ny * lat;
+    pts.push({ x: round(cxc + insideSign * nx * inner), y: round(cyc + insideSign * ny * inner) });
+  }
+  for (let i = samples; i >= 0; i--) {
+    const t = t0 + (t1 - t0) * (i / samples);
+    const along = t * len;
+    const lat = peakOff * Math.sin(t * 2 * Math.PI);
+    const cxc = ax + ux * along + nx * lat;
+    const cyc = ay + uy * along + ny * lat;
+    pts.push({ x: round(cxc + insideSign * nx * outer), y: round(cyc + insideSign * ny * outer) });
+  }
+  return pts;
+}
+
+function templeOfSpeedPatches() {
+  const ASPHALT = 65;
+  const RUNOFF_OUT = 80;
+  const PATCH_WIDTH = 50;
+  const patches = [];
+
+  // Outside corner exits — annular gravel on the outer side of fast corners.
+  patches.push({
+    surface: "gravel",
+    polygon: arcOutsidePatch(-1760, 760, 240, ASPHALT, RUNOFF_OUT, 0.85 * Math.PI, Math.PI),
+  });
+  patches.push({
+    surface: "gravel",
+    polygon: arcOutsidePatch(-1760, -880, 240, ASPHALT, RUNOFF_OUT, 1.35 * Math.PI, 1.5 * Math.PI),
+  });
+  patches.push({
+    surface: "gravel",
+    polygon: arcOutsidePatch(2000, 750, 250, ASPHALT, RUNOFF_OUT, 2 * Math.PI - 0.5, 2.5 * Math.PI - 0.15),
+  });
+
+  // Variante del Rettifilo — outside-of-arc gravel matching real Monza runoff zones.
+  // Arc 1 (T1, 90° right): gravel on the south side of the entry.
+  patches.push({
+    surface: "gravel",
+    polygon: arcOutsidePatch(-660, 904, 96, ASPHALT, RUNOFF_OUT, Math.PI / 2, Math.PI),
+  });
+  // Arc 2 (T2, 135° sharp left): gravel on the north side — the main escape area.
+  patches.push({
+    surface: "gravel",
+    polygon: arcOutsidePatch(-852, 894, 96, ASPHALT, RUNOFF_OUT, -Math.PI / 8, (-3 * Math.PI) / 4),
+  });
+
+  // Chicane apex insides — gravel on the cut-side of each apex.
+  // Variante della Roggia (T4+T5): (-2000, -200) → (-2000, -500), peakOff +130.
+  patches.push({
+    surface: "gravel",
+    polygon: chicaneApexInsidePatch(-2000, -200, -2000, -500, 130, 0.25, 0.15, ASPHALT, PATCH_WIDTH),
+  });
+  patches.push({
+    surface: "gravel",
+    polygon: chicaneApexInsidePatch(-2000, -200, -2000, -500, 130, 0.75, 0.15, ASPHALT, PATCH_WIDTH),
+  });
+  // Variante Ascari (T8+T9+T10): (-100, 200) → (600, 500), peakOff +130.
+  patches.push({
+    surface: "gravel",
+    polygon: chicaneApexInsidePatch(-100, 200, 600, 500, 130, 0.25, 0.13, ASPHALT, PATCH_WIDTH),
+  });
+  patches.push({
+    surface: "gravel",
+    polygon: chicaneApexInsidePatch(-100, 200, 600, 500, 130, 0.75, 0.13, ASPHALT, PATCH_WIDTH),
+  });
+
+  return patches;
+}
+
 function templeOfSpeedCenterline() {
   const SCALE = 2;
   const pts = [];
@@ -129,20 +233,27 @@ function templeOfSpeedCenterline() {
   // Main straight: (1000, 500) → (-300, 500), heading -x
   line(1000, 500, -300, 500, 52);
 
-  // T1+T2 Variante del Rettifilo (left-right flick): (-300, 500) → (-560, 500)
-  chicane(-300, 500, -560, 500, -30, 12);
+  // T1+T2 Variante del Rettifilo — three-arc Monza-style chicane.
+  // R1=R2=48 (sharp), L1=5, L2=20, R3=248.55 (smooth exit). Exits at y=500 — lines up with
+  // the start-finish straight, so connector + Curva Grande stay at their original positions.
+  line(-300, 500, -330, 500, 4);
+  arc(-330, 452, 48, Math.PI / 2, Math.PI, 8);
+  line(-378, 452, -378, 447, 1);
+  arc(-426, 447, 48, 0, (-3 * Math.PI) / 4, 14);
+  line(-459.94, 413.06, -474.08, 427.2, 3);
+  arc(-649.82, 251.46, 248.55, Math.PI / 4, Math.PI / 2, 10);
 
-  // Connector to T3 (Curva Grande entry): (-560, 500) → (-880, 500)
-  line(-560, 500, -880, 500, 14);
+  // Connector to T3 (Curva Grande entry) — chicane is longer now, connector is shorter
+  line(-649.82, 500, -880, 500, 12);
 
-  // T3 (Curva Grande): right-hand 90° turn, center (-880, 380), r=120, θ π/2 → π
+  // T3 (Curva Grande): right-hand 90° turn, original center
   arc(-880, 380, 120, Math.PI / 2, Math.PI, 18);
 
   // Up left side (Sector 2): (-1000, 380) → (-1000, -100)
   line(-1000, 380, -1000, -100, 20);
 
   // T4+T5 Variante della Roggia (right-left wiggle): (-1000, -100) → (-1000, -250)
-  chicane(-1000, -100, -1000, -250, 30, 8);
+  chicane(-1000, -100, -1000, -250, 65, 10);
 
   // Continue up to Lesmo: (-1000, -250) → (-1000, -440)
   line(-1000, -250, -1000, -440, 8);
@@ -160,7 +271,7 @@ function templeOfSpeedCenterline() {
   line(-663.4, -536.6, -50, 100, 36);
 
   // Variante Ascari (T8+T9+T10) chicane: (-50, 100) → (300, 250) with wiggle
-  chicane(-50, 100, 300, 250, 30, 16);
+  chicane(-50, 100, 300, 250, 65, 18);
 
   // Sector 3 straight: (300, 250) → (1000, 250)
   line(300, 250, 1000, 250, 28);
@@ -210,12 +321,17 @@ const tracks = [
   {
     file: "temple-of-speed.json",
     data: {
-      version: 1,
+      version: 2,
       name: "Temple of Speed",
       description: "chicanes & flat-out straights",
       width: 130,
       checkpoints: 12,
       startIndex: 26,
+      runoff: {
+        outside: { surface: "grass", width: 80 },
+        inside:  { surface: "grass", width: 30 },
+      },
+      patches: templeOfSpeedPatches(),
       centerline: templeOfSpeedCenterline(),
     },
   },

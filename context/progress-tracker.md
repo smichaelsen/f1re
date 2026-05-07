@@ -81,6 +81,13 @@ Update this file after every meaningful implementation change.
 - F1-style open-wheel sprite (44×20): rounded chassis, 4 corner wheels with silver hubs, sidepods, cockpit + helmet, front/rear wings.
 - 4 colour variants generated procedurally.
 
+### Temple of Speed — Prima Variante + runoff
+- Schema bump: temple-of-speed v1 → v2 with default grass runoff (outside 80, inside 30).
+- Prima Variante rebuilt as a real three-arc Monza-style chicane: ~90° right (R=48) → 5u straight → ~135° left (R=48) → 20u straight → smooth ~45° right (R=248.55). Sum of angle deltas = 0; chicane returns to y=500 so the post-T3 straight lines up with the start-finish straight. Connector + Curva Grande remain at original positions.
+- Sin-wave `chicane()` retained for Variante della Roggia and Variante Ascari (sharper peakOff=130 to force the chicane drive); Variante del Rettifilo no longer uses it.
+- Gravel patches: outside arc-1 (T1 entry), outside arc-2 (T2 escape, the main one); plus chicane-apex gravel for Roggia + Ascari, and outside arcs for Curva Grande, Lesmo 1, Parabolica.
+- Helpers in `scripts/gen-tracks.mjs`: `arcOutsidePatch(cx, cy, r, asphaltHalf, runoff, a0, a1, ...)` (annular sector) and `chicaneApexInsidePatch(...)` (sin-wave inside-cut).
+
 ### Shield visibility
 - Pulsing cyan ring (`Car.SHIELD_COLOR = 0x88ccff`) drawn around any car with `shielded = true`. Sin-based alpha pulse (0.45–0.85), 26px radius, drawn on a per-car `shieldRing` Graphics owned by `Car`.
 - `Car.spin(seconds)` now returns `boolean` — `false` when the hit was absorbed by the shield. Existing missile + oil collision paths consume the return.
