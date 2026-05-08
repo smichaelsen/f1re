@@ -1,7 +1,9 @@
 import Phaser from "phaser";
+import { ensureCarTexture } from "../entities/CarSprite";
+import { DEFAULT_TEAM_ID, TEAMS, type Team, type TeamId } from "../entities/Team";
 import { writeInspect } from "../router";
+import { Carousel } from "../ui/Carousel";
 
-export type CarColor = "red" | "blue" | "yellow" | "green";
 export type TrackKey = "oval" | "stadium" | "temple-of-speed" | "champions-wall";
 export type Difficulty = "easy" | "normal" | "hard";
 
@@ -21,14 +23,7 @@ export const DIFFICULTIES: Record<Difficulty, DifficultyParams> = {
 export const LAPS_MIN = 1;
 export const LAPS_MAX = 10;
 export const OPPONENTS_MIN = 1;
-export const OPPONENTS_MAX = 7;
-
-const COLORS: { key: CarColor; hex: number; label: string }[] = [
-  { key: "red", hex: 0xe10600, label: "RED" },
-  { key: "blue", hex: 0x1e90ff, label: "BLUE" },
-  { key: "yellow", hex: 0xf2c200, label: "YELLOW" },
-  { key: "green", hex: 0x2ecc40, label: "GREEN" },
-];
+export const OPPONENTS_MAX = 9;
 
 const TRACKS: { key: TrackKey; label: string; sub: string }[] = [
   { key: "oval", label: "OVAL", sub: "sweeping bends" },
@@ -52,13 +47,13 @@ interface CounterButtons {
 }
 
 export class MenuScene extends Phaser.Scene {
-  selectedColor: CarColor = "red";
+  selectedTeam: TeamId = DEFAULT_TEAM_ID;
   selectedTrack: TrackKey = "oval";
   selectedDifficulty: Difficulty = "normal";
   laps: number = 3;
   opponents: number = 3;
 
-  colorButtons: { key: CarColor; rect: Phaser.GameObjects.Rectangle }[] = [];
+  teamCarousel?: Carousel<Team>;
   trackButtons: { key: TrackKey; bg: Phaser.GameObjects.Rectangle; label: Phaser.GameObjects.Text; sub: Phaser.GameObjects.Text }[] = [];
   difficultyButtons: { key: Difficulty; bg: Phaser.GameObjects.Rectangle; label: Phaser.GameObjects.Text }[] = [];
   lapsCounter!: CounterButtons;
@@ -72,7 +67,6 @@ export class MenuScene extends Phaser.Scene {
   }
 
   create() {
-    this.colorButtons = [];
     this.trackButtons = [];
     this.difficultyButtons = [];
 
@@ -98,7 +92,7 @@ export class MenuScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     this.add
-      .text(cx, 230, "CAR", {
+      .text(cx, 230, "TEAM", {
         fontFamily: "system-ui, sans-serif",
         fontSize: "20px",
         color: "#888888",
@@ -106,29 +100,31 @@ export class MenuScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
-    const swatchSize = 80;
-    const swatchGap = 20;
-    const totalW = COLORS.length * swatchSize + (COLORS.length - 1) * swatchGap;
-    let sx = cx - totalW / 2 + swatchSize / 2;
-    for (const c of COLORS) {
-      const rect = this.add
-        .rectangle(sx, 290, swatchSize, swatchSize, c.hex)
-        .setStrokeStyle(3, 0x333333)
-        .setInteractive({ useHandCursor: true });
-      rect.on("pointerdown", () => {
-        this.selectedColor = c.key;
-        this.refresh();
-      });
-      this.add
-        .text(sx, 290 + swatchSize / 2 + 18, c.label, {
-          fontFamily: "system-ui, sans-serif",
-          fontSize: "13px",
-          color: "#cccccc",
-        })
-        .setOrigin(0.5);
-      this.colorButtons.push({ key: c.key, rect });
-      sx += swatchSize + swatchGap;
-    }
+    this.teamCarousel = new Carousel<Team>({
+      scene: this,
+      x: cx,
+      y: 305,
+      width: 320,
+      items: TEAMS,
+      initialId: this.selectedTeam,
+      onChange: (team) => {
+        this.selectedTeam = team.id as TeamId;
+      },
+      renderItem: (scene, container, team) => {
+        const car = scene.add
+          .sprite(0, -18, ensureCarTexture(scene, { primary: team.primary, secondary: team.secondary, variant: "sidepods" }))
+          .setScale(2.4);
+        const name = scene.add
+          .text(0, 22, team.name.toUpperCase(), {
+            fontFamily: "system-ui, sans-serif",
+            fontSize: "20px",
+            color: "#ffd24a",
+            fontStyle: "bold",
+          })
+          .setOrigin(0.5);
+        container.add([car, name]);
+      },
+    });
 
     this.add
       .text(cx, 400, "TRACK", {
@@ -260,11 +256,6 @@ export class MenuScene extends Phaser.Scene {
   }
 
   private refresh() {
-    for (const b of this.colorButtons) {
-      const selected = b.key === this.selectedColor;
-      b.rect.setStrokeStyle(selected ? 5 : 3, selected ? 0xffd24a : 0x333333);
-      b.rect.setScale(selected ? 1.08 : 1);
-    }
     for (const b of this.trackButtons) {
       const selected = b.key === this.selectedTrack;
       b.bg.setStrokeStyle(selected ? 4 : 3, selected ? 0xffd24a : 0x444444);
@@ -331,7 +322,7 @@ export class MenuScene extends Phaser.Scene {
   private start() {
     this.scene.start("RaceScene", {
       trackKey: this.selectedTrack,
-      carColor: this.selectedColor,
+      teamId: this.selectedTeam,
       difficulty: this.selectedDifficulty,
       laps: this.laps,
       opponents: this.opponents,

@@ -12,9 +12,14 @@ Everything outside the track + physics + items: the framing, the HUD, the menus,
 
 ### Cars sprite
 - F1-style open-wheel sprite (44×20): rounded chassis, 4 corner wheels with silver hubs, sidepods, cockpit + helmet, front + rear wings.
-- **Two-tone livery + design variant.** Each car has a `{ primary, secondary, variant }` livery. Variants: `nose` (secondary fills the nose cone), `sidepods` (top + bottom edge stripes on the chassis), `spine` (centerline stripe nose → engine cover), `wingtips` (secondary on the front + rear wing stripes).
-- Textures generated lazily in `src/entities/CarSprite.ts`: `ensureCarTexture(scene, livery)` builds key `car_<primary>_<secondary>_<variant>` on first use and caches it. BootScene no longer pre-bakes per-color textures.
-- AI cars get a fully random livery; player keeps the primary they chose in the menu but secondary + variant randomize at race start. Names still derive from the primary colour (with disambig `BLU`/`BLU2`/`BLU3`).
+- **Two-tone livery + design variant.** Each car has a `{ primary, secondary, variant }` livery (raw hex). Variants: `nose` (secondary fills the nose cone), `sidepods` (top + bottom edge stripes on the chassis), `spine` (centerline stripe nose → engine cover), `wingtips` (secondary on the front + rear wing stripes).
+- Textures generated lazily in `src/entities/CarSprite.ts`: `ensureCarTexture(scene, livery)` builds key `car_<primaryHex>_<secondaryHex>_<variant>` on first use and caches it. BootScene no longer pre-bakes per-color textures.
+
+### Teams
+- 11 teams in `src/entities/Team.ts`, each a 2026 F1 nod (`Scuderia Rosso`, `Silver Star`, `Rampage Racing`, `Papaya GP`, `Verde Sport`, `Alpha Bleu`, `Crown Royal`, `Forge Racing`, `Vorsprung Racing`, `Liberty Speed`, `Junior Bulls`). Each team owns `{ id, name, short, primary, secondary }`.
+- AI cars draw teams from a shuffled pool capped at 2 per team (player counts toward the cap), so HUD names need at most `PAP` / `PAP2`. Player picks their team in the menu. Random `variant` per car.
+- Opponent count: 1 – 9. With 11 teams × 2-per-cap (minus the player's team), the pool is always large enough to fill the grid.
+- Menu uses a generic `src/ui/Carousel.ts` (single visible card, ‹/› arrows, `n / N` indicator) — designed to be reused for tracks once that list grows.
 
 ### Race flow + results
 - **Grid lineup.** All cars (player included) start at staggered grid slots **before** the start/finish line. `RaceScene.startGridSlot(index)` walks `40 + index * 40` units back along the centerline from `startIndex` and offsets ±30 laterally on alternating sides. Player gets slot 0 (pole), AIs fill slots `1..opponentCount`. Geometry comes from `gridSlotBehindStart` so the lineup stays on-track even where the start straight curves.

@@ -1,19 +1,11 @@
 import Phaser from "phaser";
-import type { CarColor } from "../scenes/MenuScene";
-
-export const CAR_COLOR_HEX: Record<CarColor, number> = {
-  red: 0xe10600,
-  blue: 0x1e90ff,
-  yellow: 0xf2c200,
-  green: 0x2ecc40,
-};
 
 export const CAR_DESIGN_VARIANTS = ["nose", "sidepods", "spine", "wingtips"] as const;
 export type CarDesign = (typeof CAR_DESIGN_VARIANTS)[number];
 
-export interface CarLivery {
-  primary: CarColor;
-  secondary: CarColor;
+export interface Livery {
+  primary: number;
+  secondary: number;
   variant: CarDesign;
 }
 
@@ -24,33 +16,28 @@ const DARK = 0x222222;
 const SILVER = 0x888888;
 const WHITE = 0xffffff;
 
-export function carTextureKey(livery: CarLivery): string {
-  return `car_${livery.primary}_${livery.secondary}_${livery.variant}`;
+export function carTextureKey(livery: Livery): string {
+  return `car_${livery.primary.toString(16)}_${livery.secondary.toString(16)}_${livery.variant}`;
 }
 
-export function ensureCarTexture(scene: Phaser.Scene, livery: CarLivery): string {
+export function ensureCarTexture(scene: Phaser.Scene, livery: Livery): string {
   const key = carTextureKey(livery);
   if (scene.textures.exists(key)) return key;
-  const primary = CAR_COLOR_HEX[livery.primary];
-  const secondary = CAR_COLOR_HEX[livery.secondary];
 
   const g = scene.add.graphics();
 
-  // Wing bases (black) — drawn first so primary stripes overlay them.
   g.fillStyle(BLACK, 1);
   g.fillRoundedRect(0, 2, 5, 16, 1);
   g.fillRoundedRect(38, 1, 6, 18, 1);
 
-  // Primary livery: chassis, nose, engine cover, wing stripes.
-  g.fillStyle(primary, 1);
+  g.fillStyle(livery.primary, 1);
   g.fillRoundedRect(12, 3, 14, 14, 2);
   g.fillRect(5, 7, 11, 6);
   g.fillRect(24, 8, 14, 4);
   g.fillRect(0, 9, 5, 2);
   g.fillRect(38, 9, 6, 2);
 
-  // Secondary accent — variant-dependent.
-  g.fillStyle(secondary, 1);
+  g.fillStyle(livery.secondary, 1);
   switch (livery.variant) {
     case "nose":
       g.fillRect(5, 7, 11, 6);
@@ -68,7 +55,6 @@ export function ensureCarTexture(scene: Phaser.Scene, livery: CarLivery): string
       break;
   }
 
-  // Wheels + hubs + cockpit + helmet — overpaint the livery.
   g.fillStyle(BLACK, 1);
   g.fillRoundedRect(5, 0, 8, 5, 1);
   g.fillRoundedRect(5, 15, 8, 5, 1);
@@ -95,13 +81,6 @@ export function ensureCarTexture(scene: Phaser.Scene, livery: CarLivery): string
   return key;
 }
 
-export function randomLivery(rng: () => number, primary?: CarColor): CarLivery {
-  const colors: CarColor[] = ["red", "blue", "yellow", "green"];
-  const p = primary ?? colors[Math.floor(rng() * colors.length)];
-  let s: CarColor;
-  do {
-    s = colors[Math.floor(rng() * colors.length)];
-  } while (s === p);
-  const variant = CAR_DESIGN_VARIANTS[Math.floor(rng() * CAR_DESIGN_VARIANTS.length)];
-  return { primary: p, secondary: s, variant };
+export function randomVariant(rng: () => number): CarDesign {
+  return CAR_DESIGN_VARIANTS[Math.floor(rng() * CAR_DESIGN_VARIANTS.length)];
 }

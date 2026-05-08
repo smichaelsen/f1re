@@ -1,29 +1,23 @@
 import Phaser from "phaser";
 import { Car, DEFAULT_CAR, SHIELD_COLOR, type CarInput, type SurfaceFeel } from "../entities/Car";
-import { ensureCarTexture, randomLivery } from "../entities/CarSprite";
+import { ensureCarTexture, randomVariant } from "../entities/CarSprite";
+import { DEFAULT_TEAM_ID, TEAMS, teamById, type TeamId } from "../entities/Team";
 import { Track } from "../entities/Track";
 import { parseTrackData, SURFACE_PARAMS } from "../entities/TrackData";
 import { Hud, formatRaceTime, type PositionRow } from "../ui/Hud";
 import { TouchControls } from "../ui/TouchControls";
 import { DIFFICULTIES, LAPS_MAX, LAPS_MIN, OPPONENTS_MAX, OPPONENTS_MIN } from "./MenuScene";
-import type { CarColor, Difficulty, TrackKey } from "./MenuScene";
+import type { Difficulty, TrackKey } from "./MenuScene";
 import { AudioBus } from "../audio/AudioBus";
 import { EngineSound } from "../audio/EngineSound";
 
 interface RaceInit {
   trackKey?: TrackKey;
-  carColor?: CarColor;
+  teamId?: TeamId;
   difficulty?: Difficulty;
   laps?: number;
   opponents?: number;
 }
-
-const COLOR_NAMES: Record<CarColor, string> = {
-  red: "RED",
-  blue: "BLU",
-  yellow: "YEL",
-  green: "GRN",
-};
 const ITEMS = ["boost", "missile", "oil", "shield"] as const;
 type Item = (typeof ITEMS)[number];
 
@@ -91,7 +85,7 @@ export class RaceScene extends Phaser.Scene {
   raceEndedAt = 0;
 
   trackKey: TrackKey = "oval";
-  carColor: CarColor = "red";
+  teamId: TeamId = DEFAULT_TEAM_ID;
   difficulty: Difficulty = "normal";
   totalLaps: number = 3;
   opponentCount: number = 3;
@@ -104,7 +98,7 @@ export class RaceScene extends Phaser.Scene {
 
   init(data: RaceInit) {
     this.trackKey = data.trackKey ?? "oval";
-    this.carColor = data.carColor ?? "red";
+    this.teamId = data.teamId ?? DEFAULT_TEAM_ID;
     this.difficulty = data.difficulty ?? "normal";
     this.totalLaps = Phaser.Math.Clamp(data.laps ?? 3, LAPS_MIN, LAPS_MAX);
     this.opponentCount = Phaser.Math.Clamp(data.opponents ?? 3, OPPONENTS_MIN, OPPONENTS_MAX);
@@ -134,7 +128,12 @@ export class RaceScene extends Phaser.Scene {
     this.track = Track.fromData(this, parseTrackData(raw));
 
     const playerSlot = this.startGridSlot(0);
-    const playerLivery = randomLivery(Math.random, this.carColor);
+    const playerTeam = teamById(this.teamId);
+    const playerLivery = {
+      primary: playerTeam.primary,
+      secondary: playerTeam.secondary,
+      variant: randomVariant(Math.random),
+    };
     this.player = new Car(
       this,
       playerSlot.x,
@@ -146,14 +145,28 @@ export class RaceScene extends Phaser.Scene {
     this.player.heading = playerSlot.heading;
 
     const params = DIFFICULTIES[this.difficulty];
-    const colorCounts: Record<CarColor, number> = { red: 0, blue: 0, yellow: 0, green: 0 };
+    const teamCounts = new Map<string, number>();
+    teamCounts.set(playerTeam.id, 1);
+    const aiTeamPool: typeof TEAMS[number][] = [];
+    for (const t of TEAMS) {
+      const slots = 2 - (teamCounts.get(t.id) ?? 0);
+      for (let k = 0; k < slots; k++) aiTeamPool.push(t);
+    }
+    for (let i = aiTeamPool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [aiTeamPool[i], aiTeamPool[j]] = [aiTeamPool[j], aiTeamPool[i]];
+    }
     for (let i = 0; i < this.opponentCount; i++) {
       const slot = this.startGridSlot(i + 1);
-      const livery = randomLivery(Math.random);
-      const color = livery.primary;
-      colorCounts[color]++;
-      const baseName = COLOR_NAMES[color];
-      const aiName = colorCounts[color] === 1 ? baseName : `${baseName}${colorCounts[color]}`;
+      const team = aiTeamPool[i];
+      const livery = {
+        primary: team.primary,
+        secondary: team.secondary,
+        variant: randomVariant(Math.random),
+      };
+      const seen = (teamCounts.get(team.id) ?? 0) + 1;
+      teamCounts.set(team.id, seen);
+      const aiName = seen === 1 ? team.short : `${team.short}${seen}`;
       const [pLow, pHigh] = params.perfRange;
       const [sLow, sHigh] = params.skillRange;
       const aiCar = new Car(this, slot.x, slot.y, ensureCarTexture(this, livery), aiName, false, {
@@ -798,6 +811,7 @@ export class RaceScene extends Phaser.Scene {
     });
     rows.sort((a, b) => {
       if (a.car.finishedAtMs != null && b.car.finishedAtMs != null) {
+        if (a.car.lap !== b.car.lap) return b.car.lap - a.car.lap;
         return a.car.finishedAtMs - b.car.finishedAtMs;
       }
       if (a.car.finishedAtMs != null) return -1;
