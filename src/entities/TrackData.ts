@@ -244,12 +244,14 @@ function parsePatches(raw: unknown): SurfacePatch[] {
 
 export interface SurfaceParams {
   drag: number;
-  grip: number;
+  // 0..1 multiplier on the car's baseline grip. 1.0 = full asphalt grip.
+  // Surfaces below 1.0 depress the car's gripFactor instantly; the car recovers toward 1.0 over GRIP_RECOVERY_SEC.
+  gripFactor: number;
   color: number;
 }
 
 export const SURFACE_PARAMS: Record<Surface, SurfaceParams> = {
-  asphalt: { drag: 0.6, grip: 4.0, color: 0x3a3a3a },
-  grass:   { drag: 4.0, grip: 1.6, color: 0x3d8a3d },
-  gravel:  { drag: 8.5, grip: 1.0, color: 0xb89568 },
+  asphalt: { drag: 0.6, gripFactor: 1.00, color: 0x3a3a3a },
+  grass:   { drag: 1.2, gripFactor: 0.15, color: 0x3d8a3d },
+  gravel:  { drag: 5.0, gripFactor: 0.25, color: 0xb89568 },
 };

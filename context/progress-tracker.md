@@ -31,7 +31,7 @@ None active across systems. See per-topic files for narrower questions.
 
 ## Cross-Cutting Next Up (User picks)
 1. **Game-feel pass — audio continued** — wall-hit thump, tire skid chirp, item SFX (pickup, missile, oil, shield-block) as positional one-shots through the existing `AudioBus`. Engine voice already shipped (`progress/audio.md`).
-2. **Game-feel pass — visual** — tire skid marks on grass, dust particles, sparks on wall hits.
+2. **Game-feel pass — visual** — tire skid marks shipped (RenderTexture-based, see `progress/track-rendering.md` → Skid marks). Still open: dust particles on grass, sparks on wall hits.
 3. **Better AI** — racing-line offset (shipped), corner brake-points, item awareness (also tracked in `progress/ai-driving.md`).
 4. **Sectors + sector times** — split each track into S1/S2/S3 with per-sector best-time tracking.
 5. **Car catalog** — beyond colour: `accel`, `topSpeed`, `grip` profiles per car with pick at menu.

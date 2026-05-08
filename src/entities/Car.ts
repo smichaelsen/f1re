@@ -10,7 +10,9 @@ export interface CarInput {
 
 export interface SurfaceFeel {
   drag: number;
-  grip: number;
+  // 0..1 target multiplier on baseline grip from the surface under the car.
+  // 1.0 = asphalt; lower values depress car.gripFactor.
+  gripFactor: number;
 }
 
 export const DEFAULT_CAR: CarConfig = {
@@ -25,7 +27,12 @@ export const DEFAULT_CAR: CarConfig = {
   bodyColor: 0xe10600,
 };
 
-const DEFAULT_FEEL: SurfaceFeel = { drag: 0.6, grip: 4.0 };
+const DEFAULT_FEEL: SurfaceFeel = { drag: 0.6, gripFactor: 1.0 };
+
+// Asphalt-baseline lateral grip exponent. Final grip = BASE_GRIP * cfg.grip * car.gripFactor.
+const BASE_GRIP = 4.0;
+// Time, in seconds, to recover from gripFactor 0 → 1 once the depressing condition (e.g. grass) is removed.
+const GRIP_RECOVERY_SEC = 1.0;
 
 export const SHIELD_COLOR = 0x88ccff;
 
@@ -47,6 +54,9 @@ export class Car {
   // alongside (or in lieu of) the physics input — it survives the countdown freeze so
   // the engine can rev on the grid without affecting movement.
   audioThrottle = 0;
+  // 0..1 multiplier on baseline grip. Snaps down when a surface or event requests a penalty;
+  // recovers linearly toward 1 over GRIP_RECOVERY_SEC. Drives lateral traction in update().
+  gripFactor = 1;
   itemSlot: string | null = null;
   useItemAt: number | null = null;
 
@@ -110,6 +120,13 @@ export class Car {
   update(dt: number, input: CarInput, feel: SurfaceFeel = DEFAULT_FEEL) {
     const cfg = this.config;
 
+    // Surface acts as an instantaneous floor on gripFactor; recovery is linear over GRIP_RECOVERY_SEC.
+    if (feel.gripFactor < this.gripFactor) {
+      this.gripFactor = feel.gripFactor;
+    } else {
+      this.gripFactor = Math.min(1, this.gripFactor + dt / GRIP_RECOVERY_SEC);
+    }
+
     if (this.spinTimer > 0) {
       this.spinTimer -= dt;
       this.heading += dt * 12;
@@ -124,30 +141,33 @@ export class Car {
       const fy = Math.sin(this.heading);
 
       const boost = this.boostTimer > 0 ? 1.6 : 1.0;
+      // gripFactor gates longitudinal traction too: throttle and brake both rely on tire-to-surface friction,
+      // so a low-grip surface (grass / fresh recovery) loses acceleration and braking authority together.
+      const traction = this.gripFactor;
       if (input.throttle > 0) {
-        this.vx += fx * cfg.accel * input.throttle * boost * this.draft * dt;
-        this.vy += fy * cfg.accel * input.throttle * boost * this.draft * dt;
+        this.vx += fx * cfg.accel * input.throttle * boost * this.draft * traction * dt;
+        this.vy += fy * cfg.accel * input.throttle * boost * this.draft * traction * dt;
       }
       if (input.brake > 0) {
         const forwardDot = this.vx * fx + this.vy * fy;
         if (forwardDot > 0) {
-          const decel = cfg.brake * input.brake * dt;
+          const decel = cfg.brake * input.brake * traction * dt;
           const sp = this.speed;
           const reduce = Math.min(decel, sp);
           this.vx -= (this.vx / sp) * reduce;
           this.vy -= (this.vy / sp) * reduce;
         } else {
-          this.vx -= fx * cfg.accel * 0.5 * dt;
-          this.vy -= fy * cfg.accel * 0.5 * dt;
+          this.vx -= fx * cfg.accel * 0.5 * traction * dt;
+          this.vy -= fy * cfg.accel * 0.5 * traction * dt;
         }
       }
 
       const forwardSpeed = this.vx * fx + this.vy * fy;
       const lateralX = this.vx - fx * forwardSpeed;
       const lateralY = this.vy - fy * forwardSpeed;
-      const gripFactor = Math.exp(-feel.grip * cfg.grip * dt);
-      this.vx -= lateralX * (1 - gripFactor);
-      this.vy -= lateralY * (1 - gripFactor);
+      const gripDecay = Math.exp(-BASE_GRIP * cfg.grip * this.gripFactor * dt);
+      this.vx -= lateralX * (1 - gripDecay);
+      this.vy -= lateralY * (1 - gripDecay);
 
       const dragFactor = Math.exp(-feel.drag * dt);
       this.vx *= dragFactor;
@@ -188,6 +208,13 @@ export class Car {
   applyImpulse(ix: number, iy: number) {
     this.vx += ix;
     this.vy += iy;
+  }
+
+  // Lower the car's grip floor toward `target` (0..1). Recovery toward 1 happens automatically over GRIP_RECOVERY_SEC.
+  // No-op if `target` is already above current gripFactor (penalties only stack downward).
+  requestGripPenalty(target: number) {
+    const clamped = Math.max(0, Math.min(1, target));
+    if (clamped < this.gripFactor) this.gripFactor = clamped;
   }
 
   spin(seconds = 1.0): boolean {

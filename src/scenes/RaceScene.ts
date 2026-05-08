@@ -12,6 +12,7 @@ import { AudioBus } from "../audio/AudioBus";
 import { EngineSound } from "../audio/EngineSound";
 import { SkidSound } from "../audio/SkidSound";
 import { playPickupChime } from "../audio/PickupChime";
+import { SkidMarks } from "../entities/SkidMarks";
 
 interface RaceInit {
   trackKey?: TrackKey;
@@ -81,6 +82,7 @@ export class RaceScene extends Phaser.Scene {
   private audioBus: AudioBus | null = null;
   private engines = new Map<Car, EngineSound>();
   private skids = new Map<Car, SkidSound>();
+  private skidMarks: SkidMarks | null = null;
 
   state: RaceState = "countdown";
   countdownStartedAt = 0;
@@ -124,12 +126,15 @@ export class RaceScene extends Phaser.Scene {
     this.engines.clear();
     this.skids.clear();
     this.audioBus = null;
+    this.skidMarks = null;
     this.state = "countdown";
     this.raceStartedAt = 0;
     this.raceEndedAt = 0;
 
     const raw = this.cache.json.get(`track-${this.trackKey}`);
     this.track = Track.fromData(this, parseTrackData(raw));
+
+    this.skidMarks = this.createSkidMarks();
 
     const playerSlot = this.startGridSlot(0);
     const playerTeam = teamById(this.teamId);
@@ -214,8 +219,14 @@ export class RaceScene extends Phaser.Scene {
     this.countdownStartedAt = this.time.now;
 
     this.setupAudio();
-    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.disposeAudio());
-    this.events.once(Phaser.Scenes.Events.DESTROY, () => this.disposeAudio());
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.disposeAudio();
+      this.skidMarks = null;
+    });
+    this.events.once(Phaser.Scenes.Events.DESTROY, () => {
+      this.disposeAudio();
+      this.skidMarks = null;
+    });
   }
 
   private setupAudio() {
@@ -245,6 +256,51 @@ export class RaceScene extends Phaser.Scene {
     this.audioBus = null;
     this.engines.clear();
     this.skids.clear();
+  }
+
+  private createSkidMarks(): SkidMarks {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of this.track.centerline) {
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y > maxY) maxY = p.y;
+    }
+    // Margin generous enough to cover walls + any off-track skid drift before the bounds clip kicks in.
+    const margin = 200;
+    return new SkidMarks(this, {
+      x: minX - margin,
+      y: minY - margin,
+      width: maxX - minX + margin * 2,
+      height: maxY - minY + margin * 2,
+    });
+  }
+
+  // Drop a stamp at each of the car's 4 OBB corners while it's actually skidding.
+  // Reuses skidIntensityFor() so the audio gate (slip ratio + speed/lateral floors) is the same as
+  // the visual gate — straight-line driving, even on grass, leaves no marks; only real sliding does.
+  // Per-frame alpha is normalized to dt*60 so 30fps and 60fps build up at the same rate per second.
+  private updateSkidMarks(dt: number) {
+    if (!this.skidMarks) return;
+    if (this.state !== "racing") return;
+    const ALPHA_PER_FRAME = 0.06;
+    const dtScale = Math.min(2, dt * 60);
+    // First pass: pick the cars that are actually skidding so we can skip the batch entirely
+    // when nothing is sliding (very common — saves the render-target bind/unbind cost).
+    const skidders: { car: Car; alpha: number }[] = [];
+    for (const car of this.cars) {
+      const intensity = this.skidIntensityFor(car);
+      if (intensity <= 0) continue;
+      skidders.push({ car, alpha: ALPHA_PER_FRAME * intensity * dtScale });
+    }
+    if (skidders.length === 0) return;
+    this.skidMarks.beginFrame();
+    for (const s of skidders) {
+      for (const c of s.car.corners()) {
+        this.skidMarks.drawAt(c.x, c.y, s.car.heading, s.alpha);
+      }
+    }
+    this.skidMarks.endFrame();
   }
 
   private updateAudio() {
@@ -455,6 +511,7 @@ export class RaceScene extends Phaser.Scene {
     this.updatePickups();
     this.updateOilSlicks(dt);
     this.updateMissiles(dt);
+    this.updateSkidMarks(dt);
     for (const c of this.cars) this.updateLapTracking(c, now);
     this.handleCarCollisions();
 
@@ -474,17 +531,20 @@ export class RaceScene extends Phaser.Scene {
   }
 
   private surfaceFeel(car: Car): SurfaceFeel {
+    // Both penalties scale linearly with how many corners are on the off-asphalt surface:
+    // averaging drag and gripFactor across the 4 corners means 1 corner on grass contributes 25% of grass's penalty,
+    // 2 corners → 50%, etc. (asphalt's gripFactor of 1.0 is the no-penalty identity in the average.)
     let drag = 0;
-    let grip = 0;
+    let gripFactor = 0;
     let n = 0;
     for (const c of car.corners()) {
       const surf = this.track.surfaceAt(c.x, c.y);
       const params = SURFACE_PARAMS[surf];
       drag += params.drag;
-      grip += params.grip;
+      gripFactor += params.gripFactor;
       n++;
     }
-    return { drag: drag / n, grip: grip / n };
+    return { drag: drag / n, gripFactor: gripFactor / n };
   }
 
   private applyTrackBounds(car: Car) {
