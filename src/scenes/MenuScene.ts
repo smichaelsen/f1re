@@ -46,12 +46,20 @@ interface CounterButtons {
   value: Phaser.GameObjects.Text;
 }
 
+type View = "main" | "settings";
+
+const CONTENT_HEIGHT = 800;
+
 export class MenuScene extends Phaser.Scene {
   selectedTeam: TeamId = DEFAULT_TEAM_ID;
   selectedTrack: TrackKey = "oval";
   selectedDifficulty: Difficulty = "normal";
   laps: number = 3;
-  opponents: number = 3;
+  opponents: number = 5;
+
+  view: View = "main";
+  mainObjects: Phaser.GameObjects.GameObject[] = [];
+  settingsObjects: Phaser.GameObjects.GameObject[] = [];
 
   teamCarousel?: Carousel<Team>;
   trackButtons: { key: TrackKey; bg: Phaser.GameObjects.Rectangle; label: Phaser.GameObjects.Text; sub: Phaser.GameObjects.Text }[] = [];
@@ -59,7 +67,9 @@ export class MenuScene extends Phaser.Scene {
   lapsCounter!: CounterButtons;
   opponentsCounter!: CounterButtons;
   startBtn!: Phaser.GameObjects.Text;
+  settingsBtn!: Phaser.GameObjects.Text;
   inspectBtn!: Phaser.GameObjects.Text;
+  doneBtn!: Phaser.GameObjects.Text;
   hintText!: Phaser.GameObjects.Text;
 
   constructor() {
@@ -69,6 +79,8 @@ export class MenuScene extends Phaser.Scene {
   create() {
     this.trackButtons = [];
     this.difficultyButtons = [];
+    this.mainObjects = [];
+    this.settingsObjects = [];
 
     const cam = this.cameras.main;
     const cx = cam.width / 2;
@@ -91,14 +103,52 @@ export class MenuScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
-    this.add
+    this.buildMainView(cx);
+    this.buildSettingsView(cx);
+
+    this.hintText = this.add
+      .text(cx, cam.height - 30, "click to pick · ENTER to start", {
+        fontFamily: "system-ui, sans-serif",
+        fontSize: "13px",
+        color: "#666666",
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0);
+
+    cam.setBackgroundColor("#1a1a1a");
+    cam.setBounds(0, 0, cam.width, CONTENT_HEIGHT);
+    this.input.on("wheel", (_p: Phaser.Input.Pointer, _o: unknown, _dx: number, dy: number) => {
+      this.cameras.main.scrollY = Phaser.Math.Clamp(
+        this.cameras.main.scrollY + dy * 0.5,
+        0,
+        Math.max(0, CONTENT_HEIGHT - this.cameras.main.height),
+      );
+    });
+
+    this.input.keyboard?.on("keydown-ENTER", () => {
+      if (this.view === "main") this.start();
+    });
+    this.input.keyboard?.on("keydown-SPACE", () => {
+      if (this.view === "main") this.start();
+    });
+    this.input.keyboard?.on("keydown-ESC", () => {
+      if (this.view === "settings") this.setView("main");
+    });
+
+    this.setView("main");
+    this.refresh();
+    this.scale.on("resize", () => this.repositionForResize());
+  }
+
+  private buildMainView(cx: number) {
+    this.addMain(this.add
       .text(cx, 230, "TEAM", {
         fontFamily: "system-ui, sans-serif",
         fontSize: "20px",
         color: "#888888",
         fontStyle: "bold",
       })
-      .setOrigin(0.5);
+      .setOrigin(0.5));
 
     this.teamCarousel = new Carousel<Team>({
       scene: this,
@@ -125,15 +175,16 @@ export class MenuScene extends Phaser.Scene {
         container.add([car, name]);
       },
     });
+    this.addMain(this.teamCarousel.container);
 
-    this.add
-      .text(cx, 400, "TRACK", {
+    this.addMain(this.add
+      .text(cx, 410, "TRACK", {
         fontFamily: "system-ui, sans-serif",
         fontSize: "20px",
         color: "#888888",
         fontStyle: "bold",
       })
-      .setOrigin(0.5);
+      .setOrigin(0.5));
 
     const tw = 240;
     const th = 100;
@@ -141,25 +192,25 @@ export class MenuScene extends Phaser.Scene {
     const trackTotalW = TRACKS.length * tw + (TRACKS.length - 1) * tgap;
     let tx = cx - trackTotalW / 2 + tw / 2;
     for (const t of TRACKS) {
-      const bg = this.add
-        .rectangle(tx, 480, tw, th, 0x222222)
+      const bg = this.addMain(this.add
+        .rectangle(tx, 490, tw, th, 0x222222)
         .setStrokeStyle(3, 0x444444)
-        .setInteractive({ useHandCursor: true });
-      const label = this.add
-        .text(tx, 470, t.label, {
+        .setInteractive({ useHandCursor: true }));
+      const label = this.addMain(this.add
+        .text(tx, 480, t.label, {
           fontFamily: "system-ui, sans-serif",
           fontSize: "22px",
           color: "#ffffff",
           fontStyle: "bold",
         })
-        .setOrigin(0.5);
-      const sub = this.add
-        .text(tx, 500, t.sub, {
+        .setOrigin(0.5));
+      const sub = this.addMain(this.add
+        .text(tx, 510, t.sub, {
           fontFamily: "system-ui, sans-serif",
           fontSize: "14px",
           color: "#aaaaaa",
         })
-        .setOrigin(0.5);
+        .setOrigin(0.5));
       bg.on("pointerdown", () => {
         this.selectedTrack = t.key;
         this.refresh();
@@ -168,52 +219,8 @@ export class MenuScene extends Phaser.Scene {
       tx += tw + tgap;
     }
 
-    this.add
-      .text(cx, 575, "DIFFICULTY", {
-        fontFamily: "system-ui, sans-serif",
-        fontSize: "20px",
-        color: "#888888",
-        fontStyle: "bold",
-      })
-      .setOrigin(0.5);
-
-    const dw = 130;
-    const dh = 44;
-    const dgap = 16;
-    const diffTotalW = DIFFICULTY_BUTTONS.length * dw + (DIFFICULTY_BUTTONS.length - 1) * dgap;
-    let dx = cx - diffTotalW / 2 + dw / 2;
-    for (const d of DIFFICULTY_BUTTONS) {
-      const bg = this.add
-        .rectangle(dx, 620, dw, dh, 0x222222)
-        .setStrokeStyle(3, 0x444444)
-        .setInteractive({ useHandCursor: true });
-      const label = this.add
-        .text(dx, 620, d.label, {
-          fontFamily: "system-ui, sans-serif",
-          fontSize: "18px",
-          color: "#ffffff",
-          fontStyle: "bold",
-        })
-        .setOrigin(0.5);
-      bg.on("pointerdown", () => {
-        this.selectedDifficulty = d.key;
-        this.refresh();
-      });
-      this.difficultyButtons.push({ key: d.key, bg, label });
-      dx += dw + dgap;
-    }
-
-    this.lapsCounter = this.makeCounter(cx - 180, 695, "LAPS", () => this.laps, (v) => {
-      this.laps = Phaser.Math.Clamp(v, LAPS_MIN, LAPS_MAX);
-      this.refresh();
-    });
-    this.opponentsCounter = this.makeCounter(cx + 180, 695, "OPPONENTS", () => this.opponents, (v) => {
-      this.opponents = Phaser.Math.Clamp(v, OPPONENTS_MIN, OPPONENTS_MAX);
-      this.refresh();
-    });
-
-    this.startBtn = this.add
-      .text(cx, 770, "START RACE", {
+    this.startBtn = this.addMain(this.add
+      .text(cx, 620, "START RACE", {
         fontFamily: "system-ui, sans-serif",
         fontSize: "32px",
         color: "#1a1a1a",
@@ -222,37 +229,125 @@ export class MenuScene extends Phaser.Scene {
         fontStyle: "bold",
       })
       .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
+      .setInteractive({ useHandCursor: true }));
     this.startBtn.on("pointerdown", () => this.start());
     this.startBtn.on("pointerover", () => this.startBtn.setStyle({ backgroundColor: "#ffe680" }));
     this.startBtn.on("pointerout", () => this.startBtn.setStyle({ backgroundColor: "#ffd24a" }));
 
-    this.inspectBtn = this.add
-      .text(cx, 840, "INSPECT TRACK", {
+    this.settingsBtn = this.addMain(this.add
+      .text(cx - 110, 695, "SETTINGS", {
+        fontFamily: "system-ui, sans-serif",
+        fontSize: "16px",
+        color: "#aaaaaa",
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true }));
+    this.settingsBtn.on("pointerdown", () => this.setView("settings"));
+    this.settingsBtn.on("pointerover", () => this.settingsBtn.setColor("#ffd24a"));
+    this.settingsBtn.on("pointerout", () => this.settingsBtn.setColor("#aaaaaa"));
+
+    this.inspectBtn = this.addMain(this.add
+      .text(cx + 110, 695, "INSPECT TRACK", {
         fontFamily: "system-ui, sans-serif",
         fontSize: "16px",
         color: "#888888",
         fontStyle: "bold",
       })
       .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
+      .setInteractive({ useHandCursor: true }));
     this.inspectBtn.on("pointerdown", () => this.inspect());
     this.inspectBtn.on("pointerover", () => this.inspectBtn.setColor("#ffd24a"));
     this.inspectBtn.on("pointerout", () => this.inspectBtn.setColor("#888888"));
+  }
 
-    this.hintText = this.add
-      .text(cx, cam.height - 30, "click to pick · ENTER to start", {
+  private buildSettingsView(cx: number) {
+    this.addSettings(this.add
+      .text(cx, 230, "SETTINGS", {
         fontFamily: "system-ui, sans-serif",
-        fontSize: "13px",
-        color: "#666666",
+        fontSize: "32px",
+        color: "#ffffff",
+        fontStyle: "bold",
       })
-      .setOrigin(0.5);
+      .setOrigin(0.5));
 
-    this.input.keyboard?.on("keydown-ENTER", () => this.start());
-    this.input.keyboard?.on("keydown-SPACE", () => this.start());
+    this.addSettings(this.add
+      .text(cx, 320, "DIFFICULTY", {
+        fontFamily: "system-ui, sans-serif",
+        fontSize: "18px",
+        color: "#888888",
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5));
 
-    this.refresh();
-    this.scale.on("resize", () => this.repositionForResize());
+    const dw = 160;
+    const dh = 56;
+    const dgap = 24;
+    const diffTotalW = DIFFICULTY_BUTTONS.length * dw + (DIFFICULTY_BUTTONS.length - 1) * dgap;
+    let dx = cx - diffTotalW / 2 + dw / 2;
+    for (const d of DIFFICULTY_BUTTONS) {
+      const bg = this.addSettings(this.add
+        .rectangle(dx, 380, dw, dh, 0x222222)
+        .setStrokeStyle(3, 0x444444)
+        .setInteractive({ useHandCursor: true }));
+      const label = this.addSettings(this.add
+        .text(dx, 380, d.label, {
+          fontFamily: "system-ui, sans-serif",
+          fontSize: "20px",
+          color: "#ffffff",
+          fontStyle: "bold",
+        })
+        .setOrigin(0.5));
+      bg.on("pointerdown", () => {
+        this.selectedDifficulty = d.key;
+        this.refresh();
+      });
+      this.difficultyButtons.push({ key: d.key, bg, label });
+      dx += dw + dgap;
+    }
+
+    this.lapsCounter = this.makeCounter(cx, 490, "LAPS", () => this.laps, (v) => {
+      this.laps = Phaser.Math.Clamp(v, LAPS_MIN, LAPS_MAX);
+      this.refresh();
+    }, this.settingsObjects);
+
+    this.opponentsCounter = this.makeCounter(cx, 600, "OPPONENTS", () => this.opponents, (v) => {
+      this.opponents = Phaser.Math.Clamp(v, OPPONENTS_MIN, OPPONENTS_MAX);
+      this.refresh();
+    }, this.settingsObjects);
+
+    this.doneBtn = this.addSettings(this.add
+      .text(cx, 720, "DONE", {
+        fontFamily: "system-ui, sans-serif",
+        fontSize: "24px",
+        color: "#1a1a1a",
+        backgroundColor: "#ffd24a",
+        padding: { x: 28, y: 10 },
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true }));
+    this.doneBtn.on("pointerdown", () => this.setView("main"));
+    this.doneBtn.on("pointerover", () => this.doneBtn.setStyle({ backgroundColor: "#ffe680" }));
+    this.doneBtn.on("pointerout", () => this.doneBtn.setStyle({ backgroundColor: "#ffd24a" }));
+  }
+
+  private addMain<T extends Phaser.GameObjects.GameObject>(obj: T): T {
+    this.mainObjects.push(obj);
+    return obj;
+  }
+
+  private addSettings<T extends Phaser.GameObjects.GameObject>(obj: T): T {
+    this.settingsObjects.push(obj);
+    return obj;
+  }
+
+  private setView(view: View) {
+    this.view = view;
+    const onMain = view === "main";
+    for (const o of this.mainObjects) (o as unknown as { setVisible: (v: boolean) => void }).setVisible(onMain);
+    for (const o of this.settingsObjects) (o as unknown as { setVisible: (v: boolean) => void }).setVisible(!onMain);
+    this.hintText?.setText(onMain ? "click to pick · ENTER to start" : "click to adjust · ESC to back");
   }
 
   private refresh() {
@@ -278,15 +373,17 @@ export class MenuScene extends Phaser.Scene {
     label: string,
     getValue: () => number,
     setValue: (v: number) => void,
+    bucket: Phaser.GameObjects.GameObject[],
   ): CounterButtons {
-    this.add
-      .text(cx, y - 28, label, {
+    const labelText = this.add
+      .text(cx, y - 30, label, {
         fontFamily: "system-ui, sans-serif",
         fontSize: "16px",
         color: "#888888",
         fontStyle: "bold",
       })
       .setOrigin(0.5);
+    bucket.push(labelText);
 
     const btnStyle = {
       fontFamily: "system-ui, sans-serif",
@@ -297,21 +394,24 @@ export class MenuScene extends Phaser.Scene {
       fontStyle: "bold" as const,
     };
     const dec = this.add
-      .text(cx - 60, y, "−", btnStyle)
+      .text(cx - 70, y, "−", btnStyle)
       .setOrigin(0.5)
       .setInteractive({ useHandCursor: true });
+    bucket.push(dec);
     const inc = this.add
-      .text(cx + 60, y, "+", btnStyle)
+      .text(cx + 70, y, "+", btnStyle)
       .setOrigin(0.5)
       .setInteractive({ useHandCursor: true });
+    bucket.push(inc);
     const value = this.add
       .text(cx, y, String(getValue()), {
         fontFamily: "system-ui, sans-serif",
-        fontSize: "24px",
+        fontSize: "26px",
         color: "#ffd24a",
         fontStyle: "bold",
       })
       .setOrigin(0.5);
+    bucket.push(value);
 
     dec.on("pointerdown", () => setValue(getValue() - 1));
     inc.on("pointerdown", () => setValue(getValue() + 1));
@@ -335,8 +435,11 @@ export class MenuScene extends Phaser.Scene {
   }
 
   private repositionForResize() {
-    const cx = this.cameras.main.width / 2;
-    const cy = this.cameras.main.height;
+    const cam = this.cameras.main;
+    const cx = cam.width / 2;
+    const cy = cam.height;
     this.hintText?.setPosition(cx, cy - 30);
+    cam.setBounds(0, 0, cam.width, CONTENT_HEIGHT);
+    cam.scrollY = Phaser.Math.Clamp(cam.scrollY, 0, Math.max(0, CONTENT_HEIGHT - cam.height));
   }
 }

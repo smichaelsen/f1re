@@ -7,7 +7,8 @@ Everything outside the track + physics + items: the framing, the HUD, the menus,
 ### Engine + bootstrap
 - Phaser 3 + TypeScript + Vite scaffold (port 5273 dev, 4273 preview).
 - BootScene generates car + pickup textures procedurally.
-- MenuScene with car select (RED/BLUE/YELLOW/GREEN) + track select + difficulty (EASY/NORMAL/HARD) + laps (1-10) + opponents (1-7) counters + START + INSPECT. Difficulty maps to `DIFFICULTIES` table (perfRange for accel/grip/maxSpeed, skillRange for AI aim quality); RaceScene reads the settings from init data.
+- MenuScene split into two views: **main** (team carousel + track + START RACE + SETTINGS + INSPECT) and **settings** (DIFFICULTY / LAPS 1-10 / OPPONENTS 1-9 / DONE). `setView()` toggles visibility of `mainObjects` / `settingsObjects` arrays; ESC backs out of settings. Defaults: laps 3, opponents 5. Difficulty maps to `DIFFICULTIES` table (perfRange for accel/grip/maxSpeed, skillRange for AI aim quality); RaceScene reads the settings from init data.
+- Camera is bounded to a fixed `CONTENT_HEIGHT` (800) so wheel events scroll the menu vertically when the viewport is shorter. The bottom hint text uses `setScrollFactor(0)` so it stays pinned at the viewport bottom.
 - RaceScene state machine: countdown → racing → finished. ESC always returns to menu.
 
 ### Cars sprite
