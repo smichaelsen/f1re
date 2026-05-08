@@ -58,6 +58,17 @@ export class AudioBus {
     this.sources.push(source);
   }
 
+  // Positional gain at a fixed point, sampled now. For one-shot sounds that don't
+  // need per-frame tracking — they fire-and-forget at trigger-time gain.
+  instantaneousGain(x: number, y: number): number {
+    const { refDistance, maxDistance } = this.config;
+    const dx = x - this.listenerX;
+    const dy = y - this.listenerY;
+    const dSq = dx * dx + dy * dy;
+    if (dSq >= maxDistance * maxDistance) return 0;
+    return 1 / (1 + dSq / (refDistance * refDistance));
+  }
+
   update() {
     const { refDistance, maxDistance } = this.config;
     const refSq = refDistance * refDistance;

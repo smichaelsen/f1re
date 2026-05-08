@@ -11,9 +11,9 @@ export interface EngineSoundConfig {
 
 const DEFAULTS: EngineSoundConfig = {
   idleRate: 0.6,
-  topRate: 1.85,
+  topRate: 2.3,
   filterIdleHz: 600,
-  filterTopHz: 8000,
+  filterTopHz: 12000,
   idleGain: 0.05,
   peakGain: 0.32,
 };

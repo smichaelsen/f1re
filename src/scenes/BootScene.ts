@@ -9,6 +9,7 @@ export class BootScene extends Phaser.Scene {
   preload() {
     this.makePickupTexture("pickup", 0xffffff);
     this.load.audio("engine", "audio/engine.wav");
+    this.load.audio("skid", "audio/skid.wav");
   }
 
   create() {

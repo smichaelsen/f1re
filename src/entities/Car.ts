@@ -84,6 +84,11 @@ export class Car {
   get x() { return this.sprite.x; }
   get y() { return this.sprite.y; }
   get speed() { return Math.hypot(this.vx, this.vy); }
+  get lateralSpeed() {
+    const fx = Math.cos(this.heading);
+    const fy = Math.sin(this.heading);
+    return Math.abs(-this.vx * fy + this.vy * fx);
+  }
 
   corners(): { x: number; y: number }[] {
     const cos = Math.cos(this.heading);

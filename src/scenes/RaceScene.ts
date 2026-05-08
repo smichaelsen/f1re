@@ -10,6 +10,8 @@ import { DIFFICULTIES, LAPS_MAX, LAPS_MIN, OPPONENTS_MAX, OPPONENTS_MIN } from "
 import type { Difficulty, TrackKey } from "./MenuScene";
 import { AudioBus } from "../audio/AudioBus";
 import { EngineSound } from "../audio/EngineSound";
+import { SkidSound } from "../audio/SkidSound";
+import { playPickupChime } from "../audio/PickupChime";
 
 interface RaceInit {
   trackKey?: TrackKey;
@@ -78,6 +80,7 @@ export class RaceScene extends Phaser.Scene {
   private aiSkill = new Map<Car, AISkillState>();
   private audioBus: AudioBus | null = null;
   private engines = new Map<Car, EngineSound>();
+  private skids = new Map<Car, SkidSound>();
 
   state: RaceState = "countdown";
   countdownStartedAt = 0;
@@ -119,6 +122,7 @@ export class RaceScene extends Phaser.Scene {
     this.missiles = [];
     this.aiSkill.clear();
     this.engines.clear();
+    this.skids.clear();
     this.audioBus = null;
     this.state = "countdown";
     this.raceStartedAt = 0;
@@ -215,15 +219,23 @@ export class RaceScene extends Phaser.Scene {
   }
 
   private setupAudio() {
-    const buffer = this.cache.audio.get("engine") as AudioBuffer | undefined;
-    if (!buffer) return;
+    const engineBuf = this.cache.audio.get("engine") as AudioBuffer | undefined;
+    if (!engineBuf) return;
+    const skidBuf = this.cache.audio.get("skid") as AudioBuffer | undefined;
     this.audioBus = new AudioBus();
     for (const car of this.cars) {
-      const engine = new EngineSound(this.audioBus, buffer);
+      const engine = new EngineSound(this.audioBus, engineBuf);
       engine.setPosition(car.x, car.y);
       engine.start();
       this.audioBus.add(engine);
       this.engines.set(car, engine);
+      if (skidBuf) {
+        const skid = new SkidSound(this.audioBus, skidBuf);
+        skid.setPosition(car.x, car.y);
+        skid.start();
+        this.audioBus.add(skid);
+        this.skids.set(car, skid);
+      }
     }
   }
 
@@ -232,6 +244,7 @@ export class RaceScene extends Phaser.Scene {
     this.audioBus.dispose();
     this.audioBus = null;
     this.engines.clear();
+    this.skids.clear();
   }
 
   private updateAudio() {
@@ -240,12 +253,36 @@ export class RaceScene extends Phaser.Scene {
     this.audioBus.setListener(this.player.x, this.player.y);
     for (const car of this.cars) {
       const engine = this.engines.get(car);
-      if (!engine) continue;
-      engine.setPosition(car.x, car.y);
-      engine.setRevs(this.revsTargetFor(car));
-      engine.setFade(this.engineFadeFor(car, now));
+      if (engine) {
+        engine.setPosition(car.x, car.y);
+        engine.setRevs(this.revsTargetFor(car));
+        engine.setFade(this.engineFadeFor(car, now));
+      }
+      const skid = this.skids.get(car);
+      if (skid) {
+        skid.setPosition(car.x, car.y);
+        skid.setIntensity(this.skidIntensityFor(car));
+      }
     }
     this.audioBus.update();
+  }
+
+  // Slip-driven skid level. Gated on three things so steady cornering stays
+  // silent: minimum speed, an absolute lateral-velocity floor, and a slip *ratio*
+  // (lateral/total) — real skids have the lateral component as a meaningful share
+  // of the velocity, not just a high lateral number reached by going fast in a turn.
+  // Multiplied by the same finished-fade as the engine so finished cars don't keep screeching.
+  private skidIntensityFor(car: Car): number {
+    if (this.state !== "racing") return 0;
+    if (car.speed < 80) return 0;
+    const lateral = car.lateralSpeed;
+    if (lateral < 70) return 0;
+    const ratio = lateral / car.speed;
+    const RATIO_FLOOR = 0.30;
+    const RATIO_RANGE = 0.25;
+    const slip = Math.max(0, ratio - RATIO_FLOOR) / RATIO_RANGE;
+    const fade = this.engineFadeFor(car, this.time.now);
+    return Math.min(1, slip) * fade;
   }
 
   private revsTargetFor(car: Car): number {
@@ -583,6 +620,7 @@ export class RaceScene extends Phaser.Scene {
           p.active = false;
           p.sprite.setVisible(false);
           p.respawnAt = now + 3500;
+          if (this.audioBus) playPickupChime(this.audioBus, p.baseX, p.baseY);
           break;
         }
       }

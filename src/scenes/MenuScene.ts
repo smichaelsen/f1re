@@ -48,7 +48,7 @@ interface CounterButtons {
 
 type View = "main" | "settings";
 
-const CONTENT_HEIGHT = 800;
+const CONTENT_HEIGHT = 880;
 
 export class MenuScene extends Phaser.Scene {
   selectedTeam: TeamId = DEFAULT_TEAM_ID;
@@ -330,6 +330,43 @@ export class MenuScene extends Phaser.Scene {
     this.doneBtn.on("pointerdown", () => this.setView("main"));
     this.doneBtn.on("pointerover", () => this.doneBtn.setStyle({ backgroundColor: "#ffe680" }));
     this.doneBtn.on("pointerout", () => this.doneBtn.setStyle({ backgroundColor: "#ffd24a" }));
+
+    this.buildCredits(cx);
+  }
+
+  private buildCredits(cx: number) {
+    this.addSettings(this.add
+      .text(cx, 790, "AUDIO CREDITS", {
+        fontFamily: "system-ui, sans-serif",
+        fontSize: "13px",
+        color: "#666666",
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5));
+
+    const lineStyle: Phaser.Types.GameObjects.Text.TextStyle = {
+      fontFamily: "system-ui, sans-serif",
+      fontSize: "12px",
+      color: "#888888",
+    };
+
+    this.addSettings(this.add
+      .text(
+        cx,
+        815,
+        "Engine loop — domasx2 (OpenGameArt) — CC0",
+        lineStyle,
+      )
+      .setOrigin(0.5));
+
+    this.addSettings(this.add
+      .text(
+        cx,
+        835,
+        "Tire skid loop — Tom Haigh / audible-edge (OpenGameArt) — CC-BY 3.0",
+        lineStyle,
+      )
+      .setOrigin(0.5));
   }
 
   private addMain<T extends Phaser.GameObjects.GameObject>(obj: T): T {
