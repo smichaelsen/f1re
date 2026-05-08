@@ -67,6 +67,20 @@ export default {
       inside:  { surface: "grass", width: 50 },
     },
     patches: [],
+    // Two DRS zones fed by a single detection point at the back-straight approach.
+    // Control-point → centerline mapping: 10 samples/segment, so control idx N is centerline
+    // idx N*10. Detection halfway between T9 (control 13 → 130) and T10 (control 16 → 160) at
+    // idx 145. Zone 1: from T12 (control 19 → 190) to shortly before T13 (idx 198). Zone 2:
+    // halfway between WoC (control 21 → 210) and the checker (centerline 0, wraps; halfway =
+    // 215) to shortly before T1 (control 2 → 20, idx 17). One detection feeds both zones (Spa-
+    // style); eligibility persists across both until the next lap's detection cross at idx 145.
+    drs: {
+      detections: [145],
+      zones: [
+        { startIndex: 190, endIndex: 198 },
+        { startIndex: 215, endIndex: 17 },
+      ],
+    },
     racingLineOverrides: {
       // T12 (control idx 19) → T13 (control idx 20) → WoC (control idx 21):
       // natural min-curvature pins the inside edge (≈+46) through approach +

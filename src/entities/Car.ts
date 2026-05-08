@@ -86,6 +86,10 @@ export class Car {
   playerIndex: number | null = null;
   lap = 0;
   nextCheckpoint = 0;
+  // Wall-clock time of the last checkpoint advance. Used by the auto-unstuck watchdog —
+  // any car that hasn't progressed in 60s gets teleported back to its last gate. Set to
+  // `raceStartedAt` on the GO! transition and updated whenever `nextCheckpoint` ticks.
+  lastCheckpointMs = 0;
   bestLapMs: number | null = null;
   currentLapStartMs = 0;
   finishedAtMs: number | null = null;

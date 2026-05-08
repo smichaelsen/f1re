@@ -531,7 +531,7 @@ export class InspectScene extends Phaser.Scene {
       }
     }
 
-    if (this.showDrs && this.track.drsZones.length > 0) {
+    if (this.showDrs && (this.track.drsDetections.length > 0 || this.track.drsZones.length > 0)) {
       const cl = this.track.centerline;
       const n = cl.length;
       for (const zone of this.track.drsZones) {
@@ -545,23 +545,25 @@ export class InspectScene extends Phaser.Scene {
           this.overlay.lineTo(cl[i].x, cl[i].y);
         }
         this.overlay.strokePath();
-
-        // Gates: detection in magenta, start/end in cyan. Each gate is a perpendicular line
-        // sized by the gate's outsideHalf + insideHalf so it visibly spans the asphalt.
-        this.drawGate(zone.detection, 0xff44ff);
         this.drawGate(zone.start, 0x44ccff);
         this.drawGate(zone.end, 0x44ccff);
 
-        const detTxt = this.add
-          .text(zone.detection.x, zone.detection.y, `D${zone.index}`, DRS_LABEL_STYLE)
-          .setOrigin(0.5, 1.6)
-          .setDepth(101);
         const zoneTxt = this.add
           .text(zone.start.x, zone.start.y, `DRS${zone.index}`, DRS_LABEL_STYLE)
           .setOrigin(0.5, 1.6)
           .setDepth(101);
-        this.labels.push(detTxt, zoneTxt);
-        this.worldObjects.push(detTxt, zoneTxt);
+        this.labels.push(zoneTxt);
+        this.worldObjects.push(zoneTxt);
+      }
+
+      for (const det of this.track.drsDetections) {
+        this.drawGate(det.gate, 0xff44ff);
+        const detTxt = this.add
+          .text(det.gate.x, det.gate.y, `D${det.index}`, DRS_LABEL_STYLE)
+          .setOrigin(0.5, 1.6)
+          .setDepth(101);
+        this.labels.push(detTxt);
+        this.worldObjects.push(detTxt);
       }
     }
 

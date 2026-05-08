@@ -48,19 +48,26 @@ export interface RacingLineOverrides {
 }
 
 /**
- * One DRS zone with its own detection point. The detection point is where gaps to the car
- * ahead are evaluated; if a chasing car is within DRS_GAP_MS of the previous crosser, it
- * gets DRS for this zone. `startIndex` and `endIndex` bound the activation window along
- * the centerline. All three are centerline indices; `detectionIndex` must come strictly
- * before `startIndex`, which must come strictly before `endIndex` along the loop direction.
+ * One DRS activation zone, bounded by centerline indices. `startIndex` < `endIndex` along the
+ * loop direction (wrap-around is fine — `endIndex` may be numerically smaller if the zone
+ * crosses the seam at index 0). Detection points live separately on `DrsConfig.detections`;
+ * eligibility granted at any detection point persists through every zone until the next
+ * detection point clears or re-grants it.
  */
 export interface DrsZone {
-  detectionIndex: number;
   startIndex: number;
   endIndex: number;
 }
 
+/**
+ * DRS configuration. `detections` are centerline indices where the gap to the car ahead is
+ * measured; eligibility persists from one detection cross to the next regardless of how many
+ * zones lie between them. `zones` are activation windows where an eligible car can deploy DRS.
+ * Detections and zones are independent — multiple zones can share a single detection window
+ * (real-F1 Spa-style configuration).
+ */
 export interface DrsConfig {
+  detections: number[];
   zones: DrsZone[];
 }
 
@@ -154,32 +161,29 @@ function parseDrs(raw: unknown, n: number): DrsConfig | undefined {
   if (raw == null) return undefined;
   if (typeof raw !== "object") throw new TrackDataError("drs must be an object");
   const r = raw as Record<string, unknown>;
+  if (!Array.isArray(r.detections))
+    throw new TrackDataError("drs.detections must be an array of centerline indices");
+  if (r.detections.length === 0)
+    throw new TrackDataError("drs.detections must contain at least one detection point");
   if (!Array.isArray(r.zones)) throw new TrackDataError("drs.zones must be an array");
+  if (r.zones.length === 0)
+    throw new TrackDataError("drs.zones must contain at least one zone");
+  const detections = r.detections.map((d, i) => readIndex(d, `drs.detections[${i}]`, n));
   const zones: DrsZone[] = r.zones.map((z, i) => parseDrsZone(z, i, n));
-  return { zones };
+  return { detections, zones };
 }
 
 function parseDrsZone(raw: unknown, i: number, n: number): DrsZone {
   if (!raw || typeof raw !== "object")
     throw new TrackDataError(`drs.zones[${i}] must be an object`);
   const z = raw as Record<string, unknown>;
-  const det = readIndex(z.detectionIndex, `drs.zones[${i}].detectionIndex`, n);
   const start = readIndex(z.startIndex, `drs.zones[${i}].startIndex`, n);
   const end = readIndex(z.endIndex, `drs.zones[${i}].endIndex`, n);
-  // Validate ordering: walking the loop forward, detection → start → end with no overlap of the
-  // start→end span past the next detection. We allow wrap-around, so the comparison uses arc
-  // distance from `det` rather than raw integer ordering.
-  const arcDetToStart = (start - det + n) % n;
-  const arcDetToEnd = (end - det + n) % n;
-  if (arcDetToStart === 0 || arcDetToEnd === 0)
+  if (start === end)
     throw new TrackDataError(
-      `drs.zones[${i}]: detectionIndex must differ from startIndex and endIndex`,
+      `drs.zones[${i}]: startIndex and endIndex must differ`,
     );
-  if (arcDetToEnd <= arcDetToStart)
-    throw new TrackDataError(
-      `drs.zones[${i}]: endIndex must come after startIndex along the loop direction (after detectionIndex)`,
-    );
-  return { detectionIndex: det, startIndex: start, endIndex: end };
+  return { startIndex: start, endIndex: end };
 }
 
 function readIndex(raw: unknown, label: string, n: number): number {

@@ -45,7 +45,7 @@ Listener-relative positional audio. Player car is the listener; every sound sour
 - `src/audio/PickupChime.ts` exports `playPickupChime(bus, x, y)`. Two-osc rising chime, ~180 ms, fire-and-forget.
 - Triangle 880→1320 Hz + sine 1760→2640 Hz (sparkle harmonic at 0.35 voice gain). Linear attack 12 ms, exponential decay to silence by 180 ms.
 - Positional gain sampled once at trigger time via `AudioBus.instantaneousGain(x, y)` — no per-frame tracking; the chime is too short for listener movement to matter. Nodes self-disconnect on `onended`.
-- Triggered in `RaceScene.updatePickups` at the moment a car (player or AI) collects a pickup, played at the pickup's world position.
+- Triggered in `RaceScene.updatePickups` at the moment a *human* car collects a pickup, played at the pickup's world position. AI pickups are silent — the chime is direct feedback for the player who grabbed the box, not a positional cue about distant traffic. (In 2P, either human triggers it; the position-based listener mix takes care of localising the chime to whichever player picked up.)
 
 ### Item + hit SFX (synthetic)
 - `src/audio/ItemSfx.ts` exports eight one-shots, each fire-and-forget with positional gain sampled at trigger time. Same node-graph and self-disconnect pattern as `PickupChime`. A shared `noiseBuffer(ctx)` cache provides a 600 ms white-noise `AudioBuffer` reused across calls (created once per `AudioContext`).
@@ -74,6 +74,4 @@ Listener-relative positional audio. Player car is the listener; every sound sour
 - Skid intensity gating (speed≥40, lateralSpeed≥30, range 50) is eyeballed. Tune after a few laps on each track — Oval's continuous bend may want a higher floor so steady-state cornering doesn't whisper-skid.
 
 ## Next Up
-- Optional: stereo panning per source for left/right localisation.
-- Tune item-SFX peak gains and decay times once the user has played a few rounds — current values are eyeballed; the explosion in particular may be too loud relative to the engine voice when many AI cars fight at once.
-- Wall-thump intensity curve eyeballed (vn 60→0, vn 360→1). Re-tune after live driving — heavy crashes may want even more low-end weight, or the threshold may want to lift if light wall-scrub still triggers.
+- None. Audio considered done for now.

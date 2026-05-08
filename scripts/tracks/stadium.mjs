@@ -83,10 +83,13 @@ export default {
     // Two DRS zones on the long straights. Top straight (0..5) is the start straight; the start
     // grid sits at idx 4 between the start gate (0) and end gate (5), but the engine's edge
     // detection only fires on band-enter so the in-zone-at-T=0 cars never spuriously trigger.
+    // Each zone has its own detection point (top → idx 74 in the top-left arc, bottom → idx 34
+    // in the bottom-right arc); eligibility is overwritten at each detection cross.
     drs: {
+      detections: [74, 34],
       zones: [
-        { detectionIndex: 74, startIndex: 0, endIndex: 5 },
-        { detectionIndex: 34, startIndex: 40, endIndex: 45 },
+        { startIndex: 0, endIndex: 5 },
+        { startIndex: 40, endIndex: 45 },
       ],
     },
     centerline: stadiumCenterline(),

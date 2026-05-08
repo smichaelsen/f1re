@@ -143,14 +143,16 @@
     }
   ],
   "drs": {
+    "detections": [
+      74,
+      34
+    ],
     "zones": [
       {
-        "detectionIndex": 74,
         "startIndex": 0,
         "endIndex": 5
       },
       {
-        "detectionIndex": 34,
         "startIndex": 40,
         "endIndex": 45
       }

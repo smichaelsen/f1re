@@ -25,6 +25,12 @@ Driving model, collisions, race-flow timing.
 - Position progress formula: `lap × N + (nextCheckpoint - 1 + N) % N`.
 - Checkpoint zone widened: `outsideHalf` and `insideHalf` based on `wallOffset` + 10 margin (was symmetric `width + 20`, which missed wide-runoff cars).
 
+### Auto-unstuck watchdog
+- `Car.lastCheckpointMs` records the wall-clock time of the last checkpoint advance. Set at GO and updated whenever `nextCheckpoint` ticks.
+- `RaceScene.updateUnstuck(car, now)` runs each frame for every racing car. If `now - lastCheckpointMs > UNSTUCK_TIMEOUT_MS` (30s), the car is teleported to the centerline point of its last-crossed gate (`(nextCheckpoint - 1 + N) % N`), heading set to that gate's `angle` (the racing-direction tangent built in `makeGate`), velocities zeroed, `spinTimer` and `boostTimer` cleared. Humans get a `UNSTUCK` HUD flash; AI relocations are silent. `lastCheckpointMs` is reset to `now` so the watchdog can't re-fire on the same frame.
+- Applies equally to AI and humans by design: AI wedged on a wall and a player who spun out the wrong way both get the same rescue. 30s is short enough to feel responsive while still allowing legitimately slow recoveries (post-spin, mid-grass scrub) to complete.
+- Finished cars are exempt — `finishedAtMs != null` short-circuits the check.
+
 ## Architecture Decisions
 - **Surface affects grip via a recovering floor, not a per-frame value.** Earlier model passed `feel.grip` straight into the lateral exponent — leaving grass restored full grip on the next frame. The recovering-floor model gives a 1-second tail where the car slides after a corner-cut, and generalizes to any event that wants a transient grip drop (`Car.requestGripPenalty(target)`). Drag stays per-frame because slow-down on grass should feel immediate, not laggy.
 - **OBB collision was deliberately chosen over circles** for both walls and car-vs-car. Cars aren't round; circles produced visibly wrong results. SAT for car-vs-car keeps the door open for varied car sizes later.

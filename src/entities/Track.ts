@@ -2,7 +2,7 @@ import Phaser from "phaser";
 import {
   SURFACE_PARAMS,
   type ControlPoint,
-  type DrsZone as DrsZoneData,
+  type DrsConfig,
   type RacingLineOverrides,
   type RunoffSide,
   type Surface,
@@ -28,14 +28,19 @@ export interface Gate {
   index: number;
 }
 
+export interface DrsDetectionRuntime {
+  /** Position in the original `drs.detections` array. */
+  index: number;
+  gate: Gate;
+  centerlineIndex: number;
+}
+
 export interface DrsZoneRuntime {
   /** Position in the original `drs.zones` array. */
   index: number;
-  detection: Gate;
   start: Gate;
   end: Gate;
   /** Centerline indices for inspector + zone-fill rendering. */
-  detectionIndex: number;
   startIndex: number;
   endIndex: number;
 }
@@ -64,6 +69,7 @@ export class Track {
   name: string;
   description?: string;
   centerline: TrackPoint[];
+  centerlineCumS: number[] = [];
   controlPoints: ControlPoint[];
   width: number;
   graphics: Phaser.GameObjects.Graphics;
@@ -78,6 +84,8 @@ export class Track {
   insidePatches: SurfacePatch[] = [];
   racingLine: TrackPoint[] = [];
   racingLineOffsets: number[] = [];
+  racingLineCurvature: number[] = [];
+  drsDetections: DrsDetectionRuntime[] = [];
   drsZones: DrsZoneRuntime[] = [];
 
   constructor(scene: Phaser.Scene, data: TrackData) {
@@ -110,7 +118,7 @@ export class Track {
     this.graphics.setDepth(0);
     this.draw();
     this.buildCheckpoints();
-    this.buildDrsZones(data.drs?.zones ?? []);
+    this.buildDrs(data.drs);
     this.drawDrsMarkings();
   }
 
@@ -174,6 +182,41 @@ export class Track {
       x: pts[i].x + off * normals[i].x,
       y: pts[i].y + off * normals[i].y,
     }));
+
+    // Cumulative arc length for arc-length lookups (e.g. AI lookahead).
+    const cumS = new Array<number>(n + 1).fill(0);
+    for (let i = 0; i < n; i++) {
+      const a = pts[i];
+      const b = pts[(i + 1) % n];
+      cumS[i + 1] = cumS[i] + Math.hypot(b.x - a.x, b.y - a.y);
+    }
+    this.centerlineCumS = cumS;
+
+    // Menger curvature on the realized racing line (5-tap binomial smoothed).
+    const rl = this.racingLine;
+    const raw = new Array<number>(n).fill(0);
+    for (let i = 0; i < n; i++) {
+      const a = rl[(i - 1 + n) % n];
+      const b = rl[i];
+      const c = rl[(i + 1) % n];
+      const ab = Math.hypot(b.x - a.x, b.y - a.y);
+      const bc = Math.hypot(c.x - b.x, c.y - b.y);
+      const ac = Math.hypot(c.x - a.x, c.y - a.y);
+      if (ab < 1e-3 || bc < 1e-3 || ac < 1e-3) continue;
+      const cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+      raw[i] = (2 * Math.abs(cross)) / (ab * bc * ac);
+    }
+    const smooth = new Array<number>(n);
+    for (let i = 0; i < n; i++) {
+      smooth[i] =
+        (raw[(i - 2 + n) % n] +
+          4 * raw[(i - 1 + n) % n] +
+          6 * raw[i] +
+          4 * raw[(i + 1) % n] +
+          raw[(i + 2) % n]) /
+        16;
+    }
+    this.racingLineCurvature = smooth;
   }
 
   static fromData(scene: Phaser.Scene, data: TrackData): Track {
@@ -398,13 +441,21 @@ export class Track {
     }
   }
 
-  private buildDrsZones(zones: DrsZoneData[]) {
-    this.drsZones = zones.map((z, i) => ({
+  private buildDrs(cfg: DrsConfig | undefined) {
+    if (!cfg) {
+      this.drsDetections = [];
+      this.drsZones = [];
+      return;
+    }
+    this.drsDetections = cfg.detections.map((idx, i) => ({
       index: i,
-      detection: this.makeGate(z.detectionIndex, i),
+      gate: this.makeGate(idx, i),
+      centerlineIndex: idx,
+    }));
+    this.drsZones = cfg.zones.map((z, i) => ({
+      index: i,
       start: this.makeGate(z.startIndex, i),
       end: this.makeGate(z.endIndex, i),
-      detectionIndex: z.detectionIndex,
       startIndex: z.startIndex,
       endIndex: z.endIndex,
     }));
@@ -415,12 +466,14 @@ export class Track {
   // they read as track markings rather than overlays. Depth 2 puts them above the track paint
   // and start-stripe-equivalent layer but below skid marks (3), pickups (5), and cars (10).
   private drawDrsMarkings() {
-    if (this.drsZones.length === 0) return;
+    if (this.drsDetections.length === 0 && this.drsZones.length === 0) return;
     const g = this.scene.add.graphics();
     g.setDepth(2);
     const asphaltHalf = this.width / 2;
+    for (const det of this.drsDetections) {
+      this.drawDrsLine(g, det.gate, asphaltHalf, 0xffffff, false);
+    }
     for (const zone of this.drsZones) {
-      this.drawDrsLine(g, zone.detection, asphaltHalf, 0xffffff, false);
       this.drawDrsLine(g, zone.start, asphaltHalf, 0xffd24a, false);
       this.drawDrsLine(g, zone.end, asphaltHalf, 0xffd24a, true);
     }

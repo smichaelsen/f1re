@@ -16,6 +16,21 @@
     }
   },
   "patches": [],
+  "drs": {
+    "detections": [
+      145
+    ],
+    "zones": [
+      {
+        "startIndex": 190,
+        "endIndex": 198
+      },
+      {
+        "startIndex": 215,
+        "endIndex": 17
+      }
+    ]
+  },
   "racingLineOverrides": {
     "hints": [
       {

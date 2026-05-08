@@ -32,11 +32,9 @@ Detailed progress lives in topic files under `context/progress/`. Read the files
 None active across systems. See per-topic files for narrower questions.
 
 ## Cross-Cutting Next Up (User picks)
-1. **Game-feel pass — audio continued** — wall-hit thump, tire skid chirp, item SFX, pickup chime all shipped (`progress/audio.md`).
-2. **Game-feel pass — visual** — tire skid marks, dust on grass/gravel, and sparks on wall hits all shipped (see `progress/track-rendering.md` → Skid marks, Dust + sparks).
-3. **Better AI** — racing-line offset (shipped), corner brake-points, item awareness (also tracked in `progress/ai-driving.md`).
-4. **Sectors + sector times** — split each track into S1/S2/S3 with per-sector best-time tracking.
-5. **Car catalog** — beyond colour: `accel`, `topSpeed`, `grip` profiles per car with pick at menu.
+1. **Better AI** — racing-line offset (shipped), corner brake-points, item awareness (also tracked in `progress/ai-driving.md`).
+2. **Sectors + sector times** — split each track into S1/S2/S3 with per-sector best-time tracking.
+3. **Car catalog** — beyond colour: `accel`, `topSpeed`, `grip` profiles per car with pick at menu.
 
 ## Session Notes
 - Static build is served at `http://localhost:4273` (via `vite preview`). Dev server with hot reload runs at `http://localhost:5273` (`vite dev`). When operating in the file system, the user plays the static build to avoid hot-reload glitches.

@@ -100,6 +100,25 @@ const AIM_CHUNK_SIZE = 6;
 const AIM_OFFSET_FLOOR = 0.05;
 const AIM_OFFSET_RANGE = 0.5;
 
+// Pure-pursuit lookahead in arc length (px). Index-based lookahead failed because
+// hand-authored centerline spacing varies 10× on a single track — "4 indices ahead"
+// can mean 100px in dense apex regions or 1000px on a sparse approach, so AI starts
+// turning toward an apex from absurdly far away. Arc-length lookahead is uniform.
+const AI_LOOKAHEAD_DIST = 220;
+
+// Curvature-based brake points. For each point ahead, compute corner speed via
+// v² · κ ≤ K_LIMIT, then convert to "max speed allowed *now*" using
+// v_now = √(v_corner² + 2 · brake · distance). The min over the scan window is the target
+// — i.e. AI brakes only when actually within braking distance of a slower corner.
+// AI_BRAKE_DECEL is slightly under cfg.brake (520) to leave headroom for grip lost
+// to lateral load when braking and turning. K_LIMIT tuned so the tightest chicane
+// targets ~180px/s on Champions Wall; raise if AI is too slow, lower if it slides off.
+const AI_BRAKE_DECEL = 480;
+const AI_BRAKE_SCAN_DIST = 1200;
+const AI_LATERAL_GRIP_LIMIT = 500;
+const AI_BRAKE_DEADZONE = 1.04;
+const AI_THROTTLE_TAPER = 60;
+
 const NO_INPUT: CarInput = { throttle: 0, brake: 0, steer: 0, useItem: false, useDrs: false };
 
 // Eligibility window: chaser within this many ms of the prior crosser at a detection point gets DRS.
@@ -111,25 +130,28 @@ const DRS_AUTO_DELAY_MS = 200;
 const DRS_AI_SKILL_SPREAD = 600;
 const DRS_AI_JITTER = 200;
 
+// Auto-unstuck watchdog. A car that fails to advance a single checkpoint in this many ms gets
+// teleported back to its last gate. 30s catches genuinely wedged cars without making slow but
+// progressing recoveries (post-spin, off-track scrub) trip the watchdog.
+const UNSTUCK_TIMEOUT_MS = 30_000;
+
 interface DetectionRecord {
   car: Car;
   t: number;
-  // The car's lap counter at crossing time. Used by the chaser lookup to filter out crossings
-  // from earlier/later laps (lapping cars) so the gap is only computed against same-lap traffic.
-  lap: number;
 }
 
 interface DrsCarState {
-  // Index of the zone whose start gate the car most recently passed AND for which it was eligible.
-  // null while not currently inside a DRS zone (or while ineligible for the current one).
+  // Index of the zone whose start gate the car most recently passed while eligible. null while
+  // not currently inside a DRS zone.
   insideZoneIdx: number | null;
   // Auto mode: ms timestamp after which DRS becomes active. Cleared when fired or zone ends.
   scheduledActivateAt: number | null;
-  // The zone index that drsAvailable currently refers to. Cleared at zone end.
-  availableForZoneIdx: number | null;
-  // Per-zone-gate "currently inside band" flags for edge detection. Indexed
-  // `zoneIdx * 3 + (0|1|2)` for detection / start / end.
-  prevTouching: boolean[];
+  // Edge-detect "currently inside band" flags, one slot per detection / zone-start / zone-end.
+  // Detections and zones are independent — `Car.drsAvailable` is the single boolean eligibility
+  // flag updated by detection crosses; zones just consult it on entry.
+  prevDetTouching: boolean[];
+  prevStartTouching: boolean[];
+  prevEndTouching: boolean[];
 }
 
 export class RaceScene extends Phaser.Scene {
@@ -319,14 +341,16 @@ export class RaceScene extends Phaser.Scene {
     }
     this.cars = [...this.humans, ...this.ai];
 
+    const detCount = this.track.drsDetections.length;
     const zoneCount = this.track.drsZones.length;
-    this.drsDetectionLog = Array.from({ length: zoneCount }, () => []);
+    this.drsDetectionLog = Array.from({ length: detCount }, () => []);
     for (const car of this.cars) {
       this.drsState.set(car, {
         insideZoneIdx: null,
         scheduledActivateAt: null,
-        availableForZoneIdx: null,
-        prevTouching: new Array(zoneCount * 3).fill(false),
+        prevDetTouching: new Array(detCount).fill(false),
+        prevStartTouching: new Array(zoneCount).fill(false),
+        prevEndTouching: new Array(zoneCount).fill(false),
       });
     }
 
@@ -773,6 +797,7 @@ export class RaceScene extends Phaser.Scene {
         for (const c of this.cars) {
           c.currentLapStartMs = now;
           c.nextCheckpoint = 1;
+          c.lastCheckpointMs = now;
         }
       }
     } else {
@@ -818,6 +843,7 @@ export class RaceScene extends Phaser.Scene {
     this.updateDust();
     this.updateDrsAirflow();
     for (const c of this.cars) this.updateLapTracking(c, now);
+    for (const c of this.cars) this.updateUnstuck(c, now);
     this.handleCarCollisions();
 
     const anyFinished = this.cars.some((c) => c.finishedAtMs != null);
@@ -912,45 +938,45 @@ export class RaceScene extends Phaser.Scene {
     }
   }
 
-  // Per-car DRS state machine. Runs once per active car per frame *after* car.update + applyTrackBounds
-  // so that any wall collisions have already settled the position. Uses the gateHit band test on
-  // detection / start / end gates of every zone, with edge detection (was-not-touching →
-  // is-touching) to decide what happens. Also handles auto-activation timer fire and lift-cancel.
+  // Per-car DRS state machine. Runs once per active car per frame *after* car.update +
+  // applyTrackBounds so wall collisions have already settled the position. Detections and zones
+  // are independent: detection crosses set/clear `Car.drsAvailable`; zone-start arms activation
+  // if available; zone-end clears `drsActive` only (`drsAvailable` persists per spec — "stays
+  // available until next detection point").
   private updateDrsForCar(car: Car, input: CarInput, now: number) {
+    const detections = this.track.drsDetections;
     const zones = this.track.drsZones;
-    if (zones.length === 0) return;
+    if (detections.length === 0 && zones.length === 0) return;
     const state = this.drsState.get(car);
     if (!state) return;
 
+    for (let d = 0; d < detections.length; d++) {
+      const touching = this.track.gateHit(detections[d].gate, car.x, car.y);
+      const enter = touching && !state.prevDetTouching[d];
+      state.prevDetTouching[d] = touching;
+      if (enter) this.onDrsDetectionCross(car, d, now);
+    }
+
     for (let z = 0; z < zones.length; z++) {
       const zone = zones[z];
-      const baseIdx = z * 3;
-      const detTouching = this.track.gateHit(zone.detection, car.x, car.y);
       const startTouching = this.track.gateHit(zone.start, car.x, car.y);
       const endTouching = this.track.gateHit(zone.end, car.x, car.y);
-
-      const detEnter = detTouching && !state.prevTouching[baseIdx];
-      const startEnter = startTouching && !state.prevTouching[baseIdx + 1];
-      const endEnter = endTouching && !state.prevTouching[baseIdx + 2];
-
-      state.prevTouching[baseIdx] = detTouching;
-      state.prevTouching[baseIdx + 1] = startTouching;
-      state.prevTouching[baseIdx + 2] = endTouching;
-
-      if (detEnter) this.onDrsDetectionCross(car, state, z, now);
+      const startEnter = startTouching && !state.prevStartTouching[z];
+      const endEnter = endTouching && !state.prevEndTouching[z];
+      state.prevStartTouching[z] = startTouching;
+      state.prevEndTouching[z] = endTouching;
       if (startEnter) this.onDrsZoneStart(car, state, z, now);
       if (endEnter) this.onDrsZoneEnd(car, state, z);
     }
 
-    // Auto activation: fire when the scheduled timestamp elapses, but only if still inside the
-    // zone we scheduled it for (the end-gate handler clears it on zone exit).
+    // Auto activation: fire when the scheduled timestamp elapses.
     if (state.scheduledActivateAt != null && now >= state.scheduledActivateAt && !car.drsActive) {
       car.drsActive = true;
       state.scheduledActivateAt = null;
     }
 
-    // Manual activation (humans only — AI never sets useDrs). Pressing the DRS key inside the
-    // zone re-arms drsActive even after a lift-cancel, as long as drsAvailable is still true.
+    // Manual activation (humans only — AI never sets useDrs). Pressing the DRS key inside any
+    // zone re-arms `drsActive` even after a lift-cancel, as long as eligibility still holds.
     if (
       input.useDrs &&
       car.drsAvailable &&
@@ -962,43 +988,42 @@ export class RaceScene extends Phaser.Scene {
       state.scheduledActivateAt = null;
     }
 
-    // Lift / brake cancels DRS. Doesn't clear drsAvailable — chaser can re-trigger via manual press.
+    // Lift / brake cancels DRS. Doesn't clear drsAvailable — chaser can re-trigger via manual
+    // press, and the eligibility flag survives until the next detection cross per spec.
     if (car.drsActive && (input.throttle === 0 || input.brake > 0)) {
       car.drsActive = false;
       state.scheduledActivateAt = null;
     }
   }
 
-  private onDrsDetectionCross(car: Car, state: DrsCarState, zoneIdx: number, now: number) {
-    const log = this.drsDetectionLog[zoneIdx];
-    // Look up the most recent prior crosser on the *same* lap, excluding this car. Lap matching is
-    // important: a leader's lap-2 crossing is irrelevant to a chaser's lap-1 crossing of the same
-    // detection point. Walks backward; first match wins.
+  private onDrsDetectionCross(car: Car, detIdx: number, now: number) {
+    const log = this.drsDetectionLog[detIdx];
+    // Most recent prior crosser at this detection point, excluding this car. Lap is intentionally
+    // not considered — the gap is a physical time-difference at the line. If a leader is lapping
+    // a backmarker and crosses the detection 0.5s after them, the leader is genuinely 0.5s
+    // behind at the line and gets DRS to chase past, regardless of who's on which lap.
     let priorT: number | null = null;
     for (let i = log.length - 1; i >= 0; i--) {
       const r = log[i];
       if (r.car === car) continue;
-      if (r.lap !== car.lap) continue;
       priorT = r.t;
       break;
     }
+    log.push({ car, t: now });
 
-    log.push({ car, t: now, lap: car.lap });
-
-    // Reset eligibility on every detection cross — a previously-eligible car who didn't activate
-    // before reaching the next detection loses DRS regardless. Then re-grant if gap qualifies.
-    car.drsAvailable = false;
-    state.availableForZoneIdx = null;
-    if (!this.drsEnabled || priorT == null) return;
-    const gap = now - priorT;
-    if (gap > 0 && gap <= DRS_GAP_MS) {
-      car.drsAvailable = true;
-      state.availableForZoneIdx = zoneIdx;
+    // Each detection cross fully overwrites the eligibility flag — "stays available until next
+    // detection point", at which point we re-evaluate. Cleared if gap doesn't qualify or the
+    // scene-wide DRS isn't enabled yet.
+    if (!this.drsEnabled || priorT == null) {
+      car.drsAvailable = false;
+      return;
     }
+    const gap = now - priorT;
+    car.drsAvailable = gap > 0 && gap <= DRS_GAP_MS;
   }
 
   private onDrsZoneStart(car: Car, state: DrsCarState, zoneIdx: number, now: number) {
-    if (!car.drsAvailable || state.availableForZoneIdx !== zoneIdx) return;
+    if (!car.drsAvailable) return;
     state.insideZoneIdx = zoneIdx;
     if (this.modeForCar(car) === "auto") {
       state.scheduledActivateAt = now + this.drsAutoActivationDelay(car);
@@ -1006,14 +1031,14 @@ export class RaceScene extends Phaser.Scene {
   }
 
   private onDrsZoneEnd(car: Car, state: DrsCarState, zoneIdx: number) {
-    // Only respond to the end gate of the zone we're actually inside. Stops a rogue end-gate
-    // cross (e.g. wrong-zone overlap on chicane geometry) from clobbering an active DRS.
+    // Only respond to the end gate of the zone we're currently inside. Stops a rogue end-gate
+    // cross (e.g. chicane geometry) from clobbering DRS activated for a different zone.
     if (state.insideZoneIdx !== zoneIdx) return;
     car.drsActive = false;
-    car.drsAvailable = false;
     state.scheduledActivateAt = null;
-    state.availableForZoneIdx = null;
     state.insideZoneIdx = null;
+    // Note: `car.drsAvailable` is intentionally not cleared here. Eligibility persists across
+    // zones until the next detection cross.
   }
 
   private modeForCar(car: Car): DrsMode {
@@ -1033,32 +1058,65 @@ export class RaceScene extends Phaser.Scene {
   }
 
   private aiInput(ai: Car): CarInput {
-    const target = this.aimNextCenterline(ai);
+    const bestIdx = this.closestCenterlineIdx(ai);
+    const speed = ai.speed;
+    const target = this.aimAtRacingLine(ai, bestIdx);
     const desiredAng = Math.atan2(target.y - ai.y, target.x - ai.x);
     const diff = Phaser.Math.Angle.Wrap(desiredAng - ai.heading);
     const steer = Phaser.Math.Clamp(diff * 1.8, -1, 1);
-    const speed = ai.speed;
-    const wantSlow = Math.abs(diff) > 0.6 && speed > 200;
-    return {
-      throttle: wantSlow ? 0.4 : 1,
-      brake: wantSlow ? 0.3 : 0,
-      steer,
-      useItem: false,
-      useDrs: false,
-    };
+
+    const targetSpeed = this.aiCornerSpeed(bestIdx, speed, ai.config.maxSpeed);
+    let throttle = 1;
+    let brake = 0;
+    if (speed > targetSpeed * AI_BRAKE_DEADZONE) {
+      brake = Phaser.Math.Clamp((speed - targetSpeed) / 80, 0.2, 1);
+      throttle = 0;
+    } else if (speed > targetSpeed) {
+      throttle = Phaser.Math.Clamp((targetSpeed - speed) / AI_THROTTLE_TAPER + 1, 0.4, 1);
+    }
+    // Steer-induced safety brake: if the aim point is way off heading we're already losing
+    // the corner, so dump throttle and add brake on top of the curvature-driven decision.
+    if (Math.abs(diff) > 0.6 && speed > 200) {
+      throttle = Math.min(throttle, 0.4);
+      brake = Math.max(brake, 0.3);
+    }
+
+    return { throttle, brake, steer, useItem: false, useDrs: false };
   }
 
-  private aimNextCenterline(ai: Car) {
+  private closestCenterlineIdx(ai: Car): number {
     const pts = this.track.centerline;
-    const rl = this.track.racingLine.length === pts.length ? this.track.racingLine : pts;
     let bestIdx = 0;
     let bestDist = Infinity;
     for (let i = 0; i < pts.length; i++) {
       const d = Phaser.Math.Distance.Squared(pts[i].x, pts[i].y, ai.x, ai.y);
       if (d < bestDist) { bestDist = d; bestIdx = i; }
     }
-    const lookahead = 4;
-    const aimIdx = (bestIdx + lookahead) % pts.length;
+    return bestIdx;
+  }
+
+  private aimAtRacingLine(ai: Car, bestIdx: number) {
+    const pts = this.track.centerline;
+    const rl = this.track.racingLine.length === pts.length ? this.track.racingLine : pts;
+    const n = pts.length;
+    // Arc-length lookahead: walk forward from bestIdx until we've covered
+    // AI_LOOKAHEAD_DIST in real distance. Robust to uneven centerline spacing.
+    const cumS = this.track.centerlineCumS;
+    const totalLen = cumS[n];
+    let aimIdx = bestIdx;
+    if (cumS.length === n + 1 && totalLen > 0) {
+      let acc = 0;
+      for (let step = 1; step <= n; step++) {
+        const cur = (bestIdx + step) % n;
+        const prev = (cur - 1 + n) % n;
+        const segEnd = cur === 0 ? totalLen : cumS[cur];
+        const segLen = segEnd - cumS[prev];
+        acc += segLen;
+        if (acc >= AI_LOOKAHEAD_DIST) { aimIdx = cur; break; }
+      }
+    } else {
+      aimIdx = (bestIdx + 4) % n;
+    }
     const aim = rl[aimIdx];
 
     const state = this.aiSkill.get(ai);
@@ -1071,7 +1129,6 @@ export class RaceScene extends Phaser.Scene {
     }
     if (state.aimOffset === 0) return aim;
 
-    const n = pts.length;
     const prev = pts[(aimIdx - 1 + n) % n];
     const next = pts[(aimIdx + 1) % n];
     const dx = next.x - prev.x;
@@ -1080,6 +1137,35 @@ export class RaceScene extends Phaser.Scene {
     const nx = -dy / len;
     const ny = dx / len;
     return { x: aim.x + nx * state.aimOffset, y: aim.y + ny * state.aimOffset };
+  }
+
+  // Walk the racing line forward. At each point, compute the corner-entry speed allowed by
+  // its curvature, then convert to "max speed we can be at right now and still make that
+  // corner" via v_now = √(v_corner² + 2 · brake · arc_length_to_point). Return the minimum
+  // such threshold across the scan window. So AI cruises at maxSpeed until a corner enters
+  // its actual braking horizon — no more crawling 800px before a tight bend.
+  private aiCornerSpeed(bestIdx: number, _speed: number, maxSpeed: number): number {
+    const curv = this.track.racingLineCurvature;
+    if (curv.length === 0) return maxSpeed;
+    const rl = this.track.racingLine.length === curv.length
+      ? this.track.racingLine
+      : this.track.centerline;
+    const n = rl.length;
+    let acc = 0;
+    let minThreshold = maxSpeed;
+    for (let step = 0; step < n; step++) {
+      const i = (bestIdx + step) % n;
+      const j = (bestIdx + step + 1) % n;
+      acc += Math.hypot(rl[j].x - rl[i].x, rl[j].y - rl[i].y);
+      const k = curv[i];
+      if (k > 0) {
+        const vCorner = Math.min(maxSpeed, Math.sqrt(AI_LATERAL_GRIP_LIMIT / k));
+        const vNow = Math.sqrt(vCorner * vCorner + 2 * AI_BRAKE_DECEL * acc);
+        if (vNow < minThreshold) minThreshold = vNow;
+      }
+      if (acc > AI_BRAKE_SCAN_DIST) break;
+    }
+    return minThreshold;
   }
 
   private sampleAimOffset(skill: number): number {
@@ -1128,7 +1214,9 @@ export class RaceScene extends Phaser.Scene {
           p.active = false;
           p.sprite.setVisible(false);
           p.respawnAt = now + 3500;
-          if (this.audioBus) playPickupChime(this.audioBus, p.baseX, p.baseY);
+          // Only humans trigger the chime — AI pickups are silent. The chime is feedback
+          // for the player who grabbed the box, not a positional cue about distant traffic.
+          if (this.audioBus && c.isPlayer) playPickupChime(this.audioBus, p.baseX, p.baseY);
           break;
         }
       }
@@ -1484,6 +1572,7 @@ export class RaceScene extends Phaser.Scene {
 
     const N = this.track.checkpoints.length;
     car.nextCheckpoint = (cp + 1) % N;
+    car.lastCheckpointMs = now;
 
     if (cp !== 0) return;
 
@@ -1511,6 +1600,27 @@ export class RaceScene extends Phaser.Scene {
     if (car.lap >= this.totalLaps || winnerAlreadyFinished) {
       car.finishedAtMs = now;
     }
+  }
+
+  // Auto-unstuck watchdog. Any car that hasn't advanced a checkpoint in UNSTUCK_TIMEOUT_MS gets
+  // teleported back to the last gate it crossed, on the centerline, facing the racing direction.
+  // Catches AI getting wedged on walls and humans giving up on a recovery; trades a small
+  // teleport pop for not having to ESC → restart.
+  private updateUnstuck(car: Car, now: number) {
+    if (car.finishedAtMs != null) return;
+    if (now - car.lastCheckpointMs < UNSTUCK_TIMEOUT_MS) return;
+    const N = this.track.checkpoints.length;
+    const lastCp = (car.nextCheckpoint - 1 + N) % N;
+    const gate = this.track.checkpoints[lastCp];
+    car.sprite.x = gate.x;
+    car.sprite.y = gate.y;
+    car.heading = gate.angle;
+    car.vx = 0;
+    car.vy = 0;
+    car.spinTimer = 0;
+    car.boostTimer = 0;
+    car.lastCheckpointMs = now;
+    if (car.isPlayer) this.flashFor(car, "UNSTUCK", 1200);
   }
 
   private rankedCars(): Car[] {
