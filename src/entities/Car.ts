@@ -62,6 +62,8 @@ export class Car {
 
   name: string;
   isPlayer: boolean;
+  // 0 = P1, 1 = P2 in 2-player mode; null for AI. Lets HUD flashes/results disambiguate the two humans.
+  playerIndex: number | null = null;
   lap = 0;
   nextCheckpoint = 0;
   bestLapMs: number | null = null;

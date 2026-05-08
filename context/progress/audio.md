@@ -8,7 +8,7 @@ Listener-relative positional audio. Player car is the listener; every sound sour
 - `src/audio/AudioBus.ts` owns a shared `AudioContext` (module-level singleton) + per-bus master `GainNode`. Per-scene instance.
 - Falloff: inverse-square `gain = 1 / (1 + (d / refDistance)^2)` with hard cutoff at `maxDistance`. Defaults `refDistance = 200`, `maxDistance = 1500`, master gain `0.35`.
 - `PositionalSource` interface: `getPosition()`, `setPositionalGain(g)`, `dispose()`. Anything that wants positional audio implements it and registers via `bus.add(source)`.
-- Listener position updated per frame from the player car. Player ends up at distance 0 → gain 1.0, dominates the mix.
+- **Multiple listeners.** `bus.setListeners([{x, y}, ...])` accepts N listener positions. Per-source gain = `(1/N) × Σ falloff(d_i)` — each listener contributes equally to the mix regardless of which is closer. 1P passes a single listener (legacy behaviour). 2P passes both humans, so a sound right next to P1 plays at ~0.5 instead of 1.0 — that 50/50 trade-off is intentional so neither player loses spatial awareness when the action splits. `setListener(x, y)` is the 1-listener shortcut.
 
 ### Engine sound (sample-based)
 - Source: `public/audio/engine.wav` — `loop_0.wav` from [Racing Car Engine Sound Loops by domasx2 on OpenGameArt](https://opengameart.org/content/racing-car-engine-sound-loops). License: CC0 (public domain). 75 KB, mono, 44.1 kHz, pre-trimmed for seamless looping.
