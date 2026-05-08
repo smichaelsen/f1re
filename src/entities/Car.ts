@@ -6,6 +6,13 @@ export interface CarInput {
   brake: number;
   steer: number;
   useItem: boolean;
+  /**
+   * Manual DRS activation pulse. The InputReader sets this to true on the press edge of the
+   * DRS key/button; RaceScene consumes it inside an active DRS zone if `Car.drsAvailable`
+   * is true and the player's mode is "manual". Held state is irrelevant — only the edge
+   * counts. Auto mode ignores this entirely.
+   */
+  useDrs: boolean;
 }
 
 export interface SurfaceFeel {
@@ -36,6 +43,12 @@ const GRIP_RECOVERY_SEC = 1.0;
 
 export const SHIELD_COLOR = 0x88ccff;
 
+// DRS effect strengths. Top-speed gets a small bump and drag is shaved on top of the
+// surface-driven drag. Both stack with item boost; AI uses the same numbers. Tuned subtle —
+// the gain should feel like a trailing chase advantage, not a second boost item.
+export const DRS_TOP_SPEED_MULT = 1.06;
+export const DRS_DRAG_MULT = 0.88;
+
 export class Car {
   scene: Phaser.Scene;
   sprite: Phaser.GameObjects.Sprite;
@@ -59,6 +72,13 @@ export class Car {
   gripFactor = 1;
   itemSlot: string | null = null;
   useItemAt: number | null = null;
+
+  // DRS state. `drsAvailable` is set when the car crosses a detection point within DRS_GAP_MS of
+  // the previous crosser; cleared at the next detection point or zone end after activation.
+  // `drsActive` is the live effect flag — set when the car activates DRS inside a zone, cleared
+  // by RaceScene on lift, brake, or zone exit.
+  drsAvailable = false;
+  drsActive = false;
 
   name: string;
   isPlayer: boolean;
@@ -143,6 +163,7 @@ export class Car {
       const fy = Math.sin(this.heading);
 
       const boost = this.boostTimer > 0 ? 1.6 : 1.0;
+      const drsTop = this.drsActive ? DRS_TOP_SPEED_MULT : 1.0;
       // gripFactor gates longitudinal traction too: throttle and brake both rely on tire-to-surface friction,
       // so a low-grip surface (grass / fresh recovery) loses acceleration and braking authority together.
       const traction = this.gripFactor;
@@ -171,11 +192,12 @@ export class Car {
       this.vx -= lateralX * (1 - gripDecay);
       this.vy -= lateralY * (1 - gripDecay);
 
-      const dragFactor = Math.exp(-feel.drag * dt);
+      const dragK = this.drsActive ? feel.drag * DRS_DRAG_MULT : feel.drag;
+      const dragFactor = Math.exp(-dragK * dt);
       this.vx *= dragFactor;
       this.vy *= dragFactor;
 
-      const maxV = cfg.maxSpeed * boost * this.draft;
+      const maxV = cfg.maxSpeed * boost * drsTop * this.draft;
       const sp = this.speed;
       if (sp > maxV) {
         this.vx = (this.vx / sp) * maxV;

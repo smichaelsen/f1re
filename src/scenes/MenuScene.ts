@@ -3,6 +3,18 @@ import { ensureCarTexture } from "../entities/CarSprite";
 import { DEFAULT_TEAM_ID, TEAMS, type Team, type TeamId } from "../entities/Team";
 import { writeInspect } from "../router";
 import { Carousel } from "../ui/Carousel";
+import {
+  describeSource,
+  InputReader,
+  loadAssignments,
+  saveAssignments,
+  shortenPadId,
+  sourcesEqual,
+  type InputAssignments,
+  type InputSource,
+} from "../input/InputSource";
+import { loadDrsModes, saveDrsModes, type DrsMode, type DrsModes } from "../input/DrsMode";
+import { loadMenuPrefs, saveMenuPrefs } from "./MenuPrefs";
 
 export type TrackKey = "oval" | "stadium" | "temple-of-speed" | "champions-wall";
 export type Difficulty = "easy" | "normal" | "hard";
@@ -41,6 +53,13 @@ const DIFFICULTY_BUTTONS: { key: Difficulty; label: string }[] = [
   { key: "hard", label: "HARD" },
 ];
 
+const DRS_MODE_OPTIONS: DrsMode[] = ["auto", "manual"];
+
+interface DrsModeButtons {
+  label: Phaser.GameObjects.Text;
+  buttons: { mode: DrsMode; bg: Phaser.GameObjects.Rectangle; label: Phaser.GameObjects.Text }[];
+}
+
 export const TRACK_KEYS: TrackKey[] = TRACKS.map((t) => t.key);
 
 interface CounterButtons {
@@ -49,9 +68,23 @@ interface CounterButtons {
   value: Phaser.GameObjects.Text;
 }
 
+// 2P-only press-to-join slot. The container groups the bg + label + status text so
+// applyPlayersLayout can show/hide it as a unit. `playerIndex` resolves which slot
+// of the assignments object this widget owns.
+interface InputSlot {
+  playerIndex: 0 | 1;
+  container: Phaser.GameObjects.Container;
+  bg: Phaser.GameObjects.Rectangle;
+  title: Phaser.GameObjects.Text;
+  sourceText: Phaser.GameObjects.Text;
+  statusDot: Phaser.GameObjects.Arc;
+}
+
+const INPUT_DEBUG_ROWS = 4;
+
 type View = "main" | "settings";
 
-const CONTENT_HEIGHT = 940;
+const CONTENT_HEIGHT = 1080;
 
 export class MenuScene extends Phaser.Scene {
   selectedTeam: TeamId = DEFAULT_TEAM_ID;
@@ -83,6 +116,20 @@ export class MenuScene extends Phaser.Scene {
   doneBtn!: Phaser.GameObjects.Text;
   hintText!: Phaser.GameObjects.Text;
 
+  // Input source assignment (2P only). Persisted via localStorage so the same pad keeps its
+  // slot across sessions; reassign by clicking a slot.
+  assignments: InputAssignments = { p1: null, p2: null };
+  inputReader!: InputReader;
+  inputSlots: InputSlot[] = [];
+  // Per-player DRS activation mode. Persisted alongside other prefs; pickers in the settings view
+  // write this back via saveDrsModes(). RaceScene reads via init data on race start.
+  drsModes: DrsModes = loadDrsModes();
+  drsModeP1: DrsModeButtons | null = null;
+  drsModeP2: DrsModeButtons | null = null;
+  // Debug panel: list of connected pads with live trigger/stick values + which slot they're bound to.
+  padDebugTitle!: Phaser.GameObjects.Text;
+  padDebugRows: Phaser.GameObjects.Text[] = [];
+
   constructor() {
     super("MenuScene");
   }
@@ -92,6 +139,20 @@ export class MenuScene extends Phaser.Scene {
     this.difficultyButtons = [];
     this.mainObjects = [];
     this.settingsObjects = [];
+    this.inputSlots = [];
+    this.padDebugRows = [];
+
+    this.assignments = loadAssignments();
+    this.inputReader = new InputReader(this);
+
+    const prefs = loadMenuPrefs();
+    this.selectedTrack = prefs.track;
+    this.selectedDifficulty = prefs.difficulty;
+    this.selectedTeam = prefs.team;
+    this.selectedTeam2 = prefs.team2;
+    this.laps = prefs.laps;
+    this.opponents = prefs.opponents;
+    this.players = prefs.players;
 
     const cam = this.cameras.main;
     const cx = cam.width / 2;
@@ -115,6 +176,8 @@ export class MenuScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     this.buildMainView(cx);
+    this.buildInputSlots(cx);
+    this.buildPadDebugPanel(cx);
     this.buildSettingsView(cx);
 
     this.hintText = this.add
@@ -185,6 +248,7 @@ export class MenuScene extends Phaser.Scene {
       initialId: this.selectedTeam,
       onChange: (team) => {
         this.selectedTeam = team.id as TeamId;
+        this.savePrefs();
       },
       renderItem: renderTeam,
     });
@@ -210,6 +274,7 @@ export class MenuScene extends Phaser.Scene {
       initialId: this.selectedTeam2,
       onChange: (team) => {
         this.selectedTeam2 = team.id as TeamId;
+        this.savePrefs();
       },
       renderItem: renderTeam,
     });
@@ -252,6 +317,7 @@ export class MenuScene extends Phaser.Scene {
         .setOrigin(0.5));
       bg.on("pointerdown", () => {
         this.selectedTrack = t.key;
+        this.savePrefs();
         this.refresh();
       });
       this.trackButtons.push({ key: t.key, bg, label, sub });
@@ -300,6 +366,101 @@ export class MenuScene extends Phaser.Scene {
     this.inspectBtn.on("pointerout", () => this.inspectBtn.setColor("#888888"));
   }
 
+  // Two press-to-join slots, only visible in 2P main view (positioning handled in
+  // applyPlayersLayout). Click to clear and re-pair.
+  private buildInputSlots(cx: number) {
+    this.inputSlots.push(this.makeInputSlot(cx - 200, 372, 0, "P1 INPUT"));
+    this.inputSlots.push(this.makeInputSlot(cx + 200, 372, 1, "P2 INPUT"));
+    for (const s of this.inputSlots) s.container.setVisible(false);
+  }
+
+  private makeInputSlot(x: number, y: number, playerIndex: 0 | 1, title: string): InputSlot {
+    const w = 320;
+    const h = 56;
+    const container = this.add.container(x, y);
+    const bg = this.add
+      .rectangle(0, 0, w, h, 0x1d1d1d)
+      .setStrokeStyle(2, 0x444444)
+      .setInteractive({ useHandCursor: true });
+    const titleText = this.add
+      .text(-w / 2 + 12, -h / 2 + 6, title, {
+        fontFamily: "system-ui, sans-serif",
+        fontSize: "12px",
+        color: "#888888",
+        fontStyle: "bold",
+      });
+    const sourceText = this.add
+      .text(0, 6, "PRESS A BUTTON OR KEY", {
+        fontFamily: "system-ui, sans-serif",
+        fontSize: "16px",
+        color: "#ffd24a",
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5);
+    const statusDot = this.add.circle(w / 2 - 14, -h / 2 + 12, 5, 0x666666);
+    container.add([bg, titleText, sourceText, statusDot]);
+    bg.on("pointerdown", () => this.clearAssignment(playerIndex));
+    this.addMain(container);
+    return { playerIndex, container, bg, title: titleText, sourceText, statusDot };
+  }
+
+  private buildPadDebugPanel(cx: number) {
+    this.padDebugTitle = this.addMain(
+      this.add
+        .text(cx, 740, "CONNECTED CONTROLLERS", {
+          fontFamily: "system-ui, sans-serif",
+          fontSize: "12px",
+          color: "#666666",
+          fontStyle: "bold",
+        })
+        .setOrigin(0.5)
+        .setVisible(false),
+    );
+    for (let i = 0; i < INPUT_DEBUG_ROWS; i++) {
+      const row = this.add
+        .text(cx, 762 + i * 16, "", {
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+          fontSize: "12px",
+          color: "#888888",
+        })
+        .setOrigin(0.5)
+        .setVisible(false);
+      this.addMain(row);
+      this.padDebugRows.push(row);
+    }
+  }
+
+  private clearAssignment(playerIndex: 0 | 1) {
+    if (playerIndex === 0) this.assignments.p1 = null;
+    else this.assignments.p2 = null;
+    saveAssignments(this.assignments);
+    this.refreshInputSlot(playerIndex);
+  }
+
+  private refreshInputSlots() {
+    this.refreshInputSlot(0);
+    this.refreshInputSlot(1);
+  }
+
+  private refreshInputSlot(playerIndex: 0 | 1) {
+    const slot = this.inputSlots[playerIndex];
+    if (!slot) return;
+    const source = playerIndex === 0 ? this.assignments.p1 : this.assignments.p2;
+    if (!source) {
+      slot.sourceText.setText("PRESS A BUTTON OR KEY").setColor("#ffd24a");
+      slot.bg.setStrokeStyle(2, 0xffd24a);
+      slot.statusDot.setFillStyle(0x666666);
+      return;
+    }
+    const connected = source.kind === "keyboard" || this.inputReader.isPadConnected(source.padId);
+    slot.bg.setStrokeStyle(2, connected ? 0x444444 : 0xaa4444);
+    slot.statusDot.setFillStyle(connected ? 0x55cc66 : 0xaa4444);
+    const baseLabel = describeSource(source);
+    slot.sourceText
+      .setText(connected ? baseLabel : `${baseLabel} (OFFLINE)`)
+      .setColor(connected ? "#ffffff" : "#aaaaaa");
+  }
+
   private buildSettingsView(cx: number) {
     this.addSettings(this.add
       .text(cx, 230, "SETTINGS", {
@@ -339,6 +500,7 @@ export class MenuScene extends Phaser.Scene {
         .setOrigin(0.5));
       bg.on("pointerdown", () => {
         this.selectedDifficulty = d.key;
+        this.savePrefs();
         this.refresh();
       });
       this.difficultyButtons.push({ key: d.key, bg, label });
@@ -347,21 +509,27 @@ export class MenuScene extends Phaser.Scene {
 
     this.lapsCounter = this.makeCounter(cx, 490, "LAPS", () => this.laps, (v) => {
       this.laps = Phaser.Math.Clamp(v, LAPS_MIN, LAPS_MAX);
+      this.savePrefs();
       this.refresh();
     }, this.settingsObjects);
 
     this.opponentsCounter = this.makeCounter(cx, 600, "OPPONENTS", () => this.opponents, (v) => {
       this.opponents = Phaser.Math.Clamp(v, OPPONENTS_MIN, OPPONENTS_MAX);
+      this.savePrefs();
       this.refresh();
     }, this.settingsObjects);
 
     this.playersCounter = this.makeCounter(cx, 700, "PLAYERS (LOCAL)", () => this.players, (v) => {
       this.players = Phaser.Math.Clamp(v, PLAYERS_MIN, PLAYERS_MAX) as PlayerCount;
+      this.savePrefs();
       this.refresh();
     }, this.settingsObjects);
 
+    this.drsModeP1 = this.makeDrsModePicker(cx - 200, 800, "DRS — P1", "p1");
+    this.drsModeP2 = this.makeDrsModePicker(cx + 200, 800, "DRS — P2", "p2");
+
     this.doneBtn = this.addSettings(this.add
-      .text(cx, 790, "DONE", {
+      .text(cx, 920, "DONE", {
         fontFamily: "system-ui, sans-serif",
         fontSize: "24px",
         color: "#1a1a1a",
@@ -380,7 +548,7 @@ export class MenuScene extends Phaser.Scene {
 
   private buildCredits(cx: number) {
     this.addSettings(this.add
-      .text(cx, 850, "AUDIO CREDITS", {
+      .text(cx, 990, "AUDIO CREDITS", {
         fontFamily: "system-ui, sans-serif",
         fontSize: "13px",
         color: "#666666",
@@ -397,7 +565,7 @@ export class MenuScene extends Phaser.Scene {
     this.addSettings(this.add
       .text(
         cx,
-        875,
+        1015,
         "Engine loop — domasx2 (OpenGameArt) — CC0",
         lineStyle,
       )
@@ -406,11 +574,71 @@ export class MenuScene extends Phaser.Scene {
     this.addSettings(this.add
       .text(
         cx,
-        895,
+        1035,
         "Tire skid loop — Tom Haigh / audible-edge (OpenGameArt) — CC-BY 3.0",
         lineStyle,
       )
       .setOrigin(0.5));
+  }
+
+  // Two-button auto/manual picker per player slot. Mirrors the difficulty button row layout but
+  // narrower (two buttons instead of three). The whole group is shown/hidden based on `players`
+  // — P2's row only appears in 2P.
+  private makeDrsModePicker(
+    cx: number,
+    y: number,
+    label: string,
+    slot: "p1" | "p2",
+  ): DrsModeButtons {
+    const labelText = this.addSettings(this.add
+      .text(cx, y - 32, label, {
+        fontFamily: "system-ui, sans-serif",
+        fontSize: "14px",
+        color: "#888888",
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5));
+
+    const bw = 110;
+    const bh = 38;
+    const gap = 12;
+    const totalW = DRS_MODE_OPTIONS.length * bw + (DRS_MODE_OPTIONS.length - 1) * gap;
+    let bx = cx - totalW / 2 + bw / 2;
+    const buttons: DrsModeButtons["buttons"] = [];
+    for (const mode of DRS_MODE_OPTIONS) {
+      const bg = this.addSettings(this.add
+        .rectangle(bx, y, bw, bh, 0x222222)
+        .setStrokeStyle(2, 0x444444)
+        .setInteractive({ useHandCursor: true }));
+      const lab = this.addSettings(this.add
+        .text(bx, y, mode.toUpperCase(), {
+          fontFamily: "system-ui, sans-serif",
+          fontSize: "16px",
+          color: "#ffffff",
+          fontStyle: "bold",
+        })
+        .setOrigin(0.5));
+      bg.on("pointerdown", () => {
+        this.drsModes[slot] = mode;
+        saveDrsModes(this.drsModes);
+        this.refresh();
+      });
+      buttons.push({ mode, bg, label: lab });
+      bx += bw + gap;
+    }
+    return { label: labelText, buttons };
+  }
+
+  private savePrefs() {
+    saveMenuPrefs({
+      track: this.selectedTrack,
+      difficulty: this.selectedDifficulty,
+      team: this.selectedTeam,
+      team2: this.selectedTeam2,
+      laps: this.laps,
+      opponents: this.opponents,
+      players: this.players,
+    });
   }
 
   private addMain<T extends Phaser.GameObjects.GameObject>(obj: T): T {
@@ -432,6 +660,9 @@ export class MenuScene extends Phaser.Scene {
     // P2 carousel is in `mainObjects`, so the loop above unconditionally shows it on main —
     // re-apply the players-aware layout to hide it again when in 1P mode.
     if (onMain) this.applyPlayersLayout();
+    // Re-run the highlight + per-player visibility logic so the DRS picker selection state and
+    // 1P/2P-aware row visibility reflect current data after the bulk visibility toggle above.
+    this.refresh();
   }
 
   private refresh() {
@@ -450,7 +681,23 @@ export class MenuScene extends Phaser.Scene {
     this.lapsCounter?.value.setText(String(this.laps));
     this.opponentsCounter?.value.setText(String(this.opponents));
     this.playersCounter?.value.setText(String(this.players));
+    this.refreshDrsButtons(this.drsModeP1, this.drsModes.p1, true);
+    this.refreshDrsButtons(this.drsModeP2, this.drsModes.p2, this.players === 2);
     this.applyPlayersLayout();
+  }
+
+  private refreshDrsButtons(group: DrsModeButtons | null, current: DrsMode, visible: boolean) {
+    if (!group) return;
+    const showOnSettings = visible && this.view === "settings";
+    group.label.setVisible(showOnSettings);
+    for (const b of group.buttons) {
+      b.bg.setVisible(showOnSettings);
+      b.label.setVisible(showOnSettings);
+      const selected = b.mode === current;
+      b.bg.setStrokeStyle(selected ? 3 : 2, selected ? 0xffd24a : 0x444444);
+      b.bg.setFillStyle(selected ? 0x2a2a2a : 0x1d1d1d);
+      b.label.setColor(selected ? "#ffd24a" : "#ffffff");
+    }
   }
 
   // Reposition + show/hide team carousels based on `players` count. In 1P the single carousel
@@ -460,6 +707,7 @@ export class MenuScene extends Phaser.Scene {
     if (!this.teamCarousel || !this.teamCarousel2) return;
     const cam = this.cameras.main;
     const cx = cam.width / 2;
+    const showInputs = this.players === 2 && this.view === "main";
     if (this.players === 2) {
       this.teamLabel?.setText("P1 TEAM");
       this.teamLabel?.setPosition(cx - 200, 230);
@@ -472,6 +720,74 @@ export class MenuScene extends Phaser.Scene {
       this.teamCarousel.container.setPosition(cx, 305);
       this.teamLabel2?.setVisible(false);
       this.teamCarousel2.container.setVisible(false);
+    }
+    this.inputSlots[0]?.container.setPosition(cx - 200, 372).setVisible(showInputs);
+    this.inputSlots[1]?.container.setPosition(cx + 200, 372).setVisible(showInputs);
+    this.padDebugTitle?.setVisible(showInputs);
+    for (const r of this.padDebugRows) r.setVisible(showInputs);
+    if (showInputs) this.refreshInputSlots();
+  }
+
+  // Phaser lifecycle. Press-to-join polling + live debug refresh, only while the 2P
+  // input section is visible.
+  update() {
+    if (this.players !== 2 || this.view !== "main") return;
+
+    const exclude: (InputSource | null)[] = [this.assignments.p1, this.assignments.p2];
+    let changed = false;
+    if (!this.assignments.p1) {
+      const src = this.inputReader.pollNewPress(exclude);
+      if (src) {
+        this.assignments.p1 = src;
+        exclude[0] = src;
+        changed = true;
+      }
+    }
+    if (!this.assignments.p2) {
+      const src = this.inputReader.pollNewPress(exclude);
+      if (src) {
+        this.assignments.p2 = src;
+        changed = true;
+      }
+    }
+    if (changed) {
+      saveAssignments(this.assignments);
+      this.refreshInputSlots();
+    } else {
+      // Refresh status (connection state may have changed without a reassignment).
+      this.refreshInputSlots();
+    }
+
+    this.refreshPadDebug();
+  }
+
+  private refreshPadDebug() {
+    const pads = this.inputReader.getConnectedPads();
+    if (pads.length === 0) {
+      this.padDebugRows[0]?.setText("(no controllers detected — pair via Bluetooth then press a button)").setColor("#666666");
+      for (let i = 1; i < this.padDebugRows.length; i++) this.padDebugRows[i].setText("");
+      return;
+    }
+    for (let i = 0; i < this.padDebugRows.length; i++) {
+      const row = this.padDebugRows[i];
+      const pad = pads[i];
+      if (!pad) {
+        row.setText("");
+        continue;
+      }
+      const snap = this.inputReader.getPadDebugSnapshot(pad.id);
+      const t = snap?.throttle ?? 0;
+      const b = snap?.brake ?? 0;
+      const lx = snap?.steerX ?? 0;
+      const padSrc: InputSource = { kind: "pad", padId: pad.id };
+      const slot = sourcesEqual(this.assignments.p1, padSrc)
+        ? "→ P1"
+        : sourcesEqual(this.assignments.p2, padSrc)
+          ? "→ P2"
+          : "    ";
+      const name = shortenPadId(pad.id).padEnd(28);
+      const line = `#${pad.index} ${name}  T:${t.toFixed(2)} B:${b.toFixed(2)} LX:${lx >= 0 ? "+" : ""}${lx.toFixed(2)}  ${slot}`;
+      row.setText(line).setColor("#aaaaaa");
     }
   }
 
@@ -528,6 +844,9 @@ export class MenuScene extends Phaser.Scene {
   }
 
   private start() {
+    // Only forward sources in 2P. 1P uses RaceScene's auto-merge (kb arrows + first pad).
+    const inputSources =
+      this.players === 2 ? [this.assignments.p1, this.assignments.p2] : undefined;
     this.scene.start("RaceScene", {
       trackKey: this.selectedTrack,
       teamId: this.selectedTeam,
@@ -536,6 +855,8 @@ export class MenuScene extends Phaser.Scene {
       difficulty: this.selectedDifficulty,
       laps: this.laps,
       opponents: this.opponents,
+      inputSources,
+      drsModes: this.drsModes,
     });
   }
 

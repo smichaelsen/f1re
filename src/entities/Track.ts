@@ -2,6 +2,7 @@ import Phaser from "phaser";
 import {
   SURFACE_PARAMS,
   type ControlPoint,
+  type DrsZone as DrsZoneData,
   type RacingLineOverrides,
   type RunoffSide,
   type Surface,
@@ -13,13 +14,33 @@ import {
 export type { ControlPoint, TrackPoint } from "./TrackData";
 export type Side = "outside" | "inside";
 
-export interface CheckpointZone {
+/**
+ * Perpendicular gate across the track at a given centerline index. Used for both
+ * checkpoints and DRS detection / zone-entry / zone-exit lines. `gateHit(g, x, y)` is the
+ * shared crossing test.
+ */
+export interface Gate {
   x: number;
   y: number;
   angle: number;
   outsideHalf: number;
   insideHalf: number;
   index: number;
+}
+
+export interface DrsZoneRuntime {
+  /** Position in the original `drs.zones` array. */
+  index: number;
+  detection: Gate;
+  start: Gate;
+  end: Gate;
+  /** Centerline indices for inspector + zone-fill rendering. */
+  detectionIndex: number;
+  startIndex: number;
+  endIndex: number;
+}
+
+export interface CheckpointZone extends Gate {
   isFinish: boolean;
 }
 
@@ -57,6 +78,7 @@ export class Track {
   insidePatches: SurfacePatch[] = [];
   racingLine: TrackPoint[] = [];
   racingLineOffsets: number[] = [];
+  drsZones: DrsZoneRuntime[] = [];
 
   constructor(scene: Phaser.Scene, data: TrackData) {
     this.scene = scene;
@@ -88,6 +110,8 @@ export class Track {
     this.graphics.setDepth(0);
     this.draw();
     this.buildCheckpoints();
+    this.buildDrsZones(data.drs?.zones ?? []);
+    this.drawDrsMarkings();
   }
 
   /**
@@ -369,19 +393,86 @@ export class Track {
     const n = this.centerline.length;
     for (let i = 0; i < count; i++) {
       const idx = (this.startIndex + Math.floor((i / count) * n)) % n;
-      const a = this.centerline[idx];
-      const b = this.centerline[(idx + 1) % n];
-      const ang = Math.atan2(b.y - a.y, b.x - a.x);
-      this.checkpoints.push({
-        x: a.x,
-        y: a.y,
-        angle: ang,
-        outsideHalf: this.wallOffset("outside", idx) + 10,
-        insideHalf: this.wallOffset("inside", idx) + 10,
-        index: i,
-        isFinish: i === 0,
-      });
+      const gate = this.makeGate(idx, i);
+      this.checkpoints.push({ ...gate, isFinish: i === 0 });
     }
+  }
+
+  private buildDrsZones(zones: DrsZoneData[]) {
+    this.drsZones = zones.map((z, i) => ({
+      index: i,
+      detection: this.makeGate(z.detectionIndex, i),
+      start: this.makeGate(z.startIndex, i),
+      end: this.makeGate(z.endIndex, i),
+      detectionIndex: z.detectionIndex,
+      startIndex: z.startIndex,
+      endIndex: z.endIndex,
+    }));
+  }
+
+  // In-race DRS markings painted onto the asphalt: white solid for detection, yellow solid for
+  // zone start, yellow dashed for zone end. Lines span ±asphaltHalf only (not into runoff) so
+  // they read as track markings rather than overlays. Depth 2 puts them above the track paint
+  // and start-stripe-equivalent layer but below skid marks (3), pickups (5), and cars (10).
+  private drawDrsMarkings() {
+    if (this.drsZones.length === 0) return;
+    const g = this.scene.add.graphics();
+    g.setDepth(2);
+    const asphaltHalf = this.width / 2;
+    for (const zone of this.drsZones) {
+      this.drawDrsLine(g, zone.detection, asphaltHalf, 0xffffff, false);
+      this.drawDrsLine(g, zone.start, asphaltHalf, 0xffd24a, false);
+      this.drawDrsLine(g, zone.end, asphaltHalf, 0xffd24a, true);
+    }
+  }
+
+  private drawDrsLine(
+    g: Phaser.GameObjects.Graphics,
+    gate: Gate,
+    half: number,
+    color: number,
+    dashed: boolean,
+  ) {
+    const nx = -Math.sin(gate.angle);
+    const ny = Math.cos(gate.angle);
+    const x0 = gate.x - nx * half;
+    const y0 = gate.y - ny * half;
+    const x1 = gate.x + nx * half;
+    const y1 = gate.y + ny * half;
+    g.lineStyle(2, color, 0.3);
+    if (!dashed) {
+      g.beginPath();
+      g.moveTo(x0, y0);
+      g.lineTo(x1, y1);
+      g.strokePath();
+      return;
+    }
+    // Dashed end gate: 9 segments (5 strokes + 4 gaps) so the alternating pattern reads even
+    // on narrow tracks.
+    const segments = 9;
+    const dx = (x1 - x0) / segments;
+    const dy = (y1 - y0) / segments;
+    for (let i = 0; i < segments; i += 2) {
+      g.beginPath();
+      g.moveTo(x0 + dx * i, y0 + dy * i);
+      g.lineTo(x0 + dx * (i + 1), y0 + dy * (i + 1));
+      g.strokePath();
+    }
+  }
+
+  private makeGate(idx: number, label: number): Gate {
+    const n = this.centerline.length;
+    const a = this.centerline[idx];
+    const b = this.centerline[(idx + 1) % n];
+    const ang = Math.atan2(b.y - a.y, b.x - a.x);
+    return {
+      x: a.x,
+      y: a.y,
+      angle: ang,
+      outsideHalf: this.wallOffset("outside", idx) + 10,
+      insideHalf: this.wallOffset("inside", idx) + 10,
+      index: label,
+    };
   }
 
   probe(x: number, y: number): ProbeResult {
@@ -451,15 +542,23 @@ export class Track {
   }
 
   checkpointHit(cpIndex: number, x: number, y: number): boolean {
-    const cp = this.checkpoints[cpIndex];
-    const dx = x - cp.x;
-    const dy = y - cp.y;
-    const cos = Math.cos(-cp.angle);
-    const sin = Math.sin(-cp.angle);
+    return this.gateHit(this.checkpoints[cpIndex], x, y);
+  }
+
+  /**
+   * Generic perpendicular-gate crossing test. Used by checkpoints and DRS gates.
+   * The gate is a 60-px-thick band centered on the gate point, extending across
+   * the track from outside wall to inside wall.
+   */
+  gateHit(gate: Gate, x: number, y: number): boolean {
+    const dx = x - gate.x;
+    const dy = y - gate.y;
+    const cos = Math.cos(-gate.angle);
+    const sin = Math.sin(-gate.angle);
     const lx = dx * cos - dy * sin;
     const ly = dx * sin + dy * cos;
     if (Math.abs(lx) >= 30) return false;
-    return ly >= -cp.outsideHalf && ly <= cp.insideHalf;
+    return ly >= -gate.outsideHalf && ly <= gate.insideHalf;
   }
 }
 

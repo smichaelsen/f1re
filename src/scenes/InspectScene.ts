@@ -12,6 +12,7 @@ interface InspectToggles {
   showRacingLine: boolean;
   showReferenceOverlay: boolean;
   showControlPoints: boolean;
+  showDrs: boolean;
 }
 
 const DEFAULT_TOGGLES: InspectToggles = {
@@ -20,6 +21,7 @@ const DEFAULT_TOGGLES: InspectToggles = {
   showRacingLine: true,
   showReferenceOverlay: true,
   showControlPoints: true,
+  showDrs: true,
 };
 
 function loadToggles(): InspectToggles {
@@ -33,6 +35,7 @@ function loadToggles(): InspectToggles {
       showRacingLine: typeof parsed.showRacingLine === "boolean" ? parsed.showRacingLine : DEFAULT_TOGGLES.showRacingLine,
       showReferenceOverlay: typeof parsed.showReferenceOverlay === "boolean" ? parsed.showReferenceOverlay : DEFAULT_TOGGLES.showReferenceOverlay,
       showControlPoints: typeof parsed.showControlPoints === "boolean" ? parsed.showControlPoints : DEFAULT_TOGGLES.showControlPoints,
+      showDrs: typeof parsed.showDrs === "boolean" ? parsed.showDrs : DEFAULT_TOGGLES.showDrs,
     };
   } catch {
     return { ...DEFAULT_TOGGLES };
@@ -85,6 +88,15 @@ const CTRL_LABEL_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
   strokeThickness: 3,
 };
 
+const DRS_LABEL_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
+  fontFamily: "system-ui, sans-serif",
+  fontSize: "13px",
+  fontStyle: "bold",
+  color: "#88ccff",
+  stroke: "#000000",
+  strokeThickness: 3,
+};
+
 export class InspectScene extends Phaser.Scene {
   trackKey: TrackKey = "oval";
   track!: Track;
@@ -110,6 +122,7 @@ export class InspectScene extends Phaser.Scene {
   showRacingLine = DEFAULT_TOGGLES.showRacingLine;
   showReferenceOverlay = DEFAULT_TOGGLES.showReferenceOverlay;
   showControlPoints = DEFAULT_TOGGLES.showControlPoints;
+  showDrs = DEFAULT_TOGGLES.showDrs;
 
   referenceOverlay: ReferenceOverlay | undefined;
   referenceOverlayImage: Phaser.GameObjects.Image | null = null;
@@ -132,6 +145,7 @@ export class InspectScene extends Phaser.Scene {
     three: Phaser.Input.Keyboard.Key;
     four: Phaser.Input.Keyboard.Key;
     five: Phaser.Input.Keyboard.Key;
+    six: Phaser.Input.Keyboard.Key;
     zero: Phaser.Input.Keyboard.Key;
     prev: Phaser.Input.Keyboard.Key;
     next: Phaser.Input.Keyboard.Key;
@@ -150,6 +164,7 @@ export class InspectScene extends Phaser.Scene {
     this.showRacingLine = t.showRacingLine;
     this.showReferenceOverlay = t.showReferenceOverlay;
     this.showControlPoints = t.showControlPoints;
+    this.showDrs = t.showDrs;
   }
 
   private persistToggles() {
@@ -159,6 +174,7 @@ export class InspectScene extends Phaser.Scene {
       showRacingLine: this.showRacingLine,
       showReferenceOverlay: this.showReferenceOverlay,
       showControlPoints: this.showControlPoints,
+      showDrs: this.showDrs,
     });
   }
 
@@ -211,7 +227,7 @@ export class InspectScene extends Phaser.Scene {
       this.add.text(
         20,
         this.scale.height - 30,
-        "drag pan · wheel/buttons zoom · 0 fit · 1 points · 2 checkpoints · 3 racing line · 4 reference · 5 control pts · [ ] track · ESC menu",
+        "drag pan · wheel/buttons zoom · 0 fit · 1 points · 2 checkpoints · 3 racing line · 4 reference · 5 control pts · 6 DRS · [ ] track · ESC menu",
         { ...HUD_STYLE, fontSize: "13px", color: "#aaaaaa" },
       ),
     );
@@ -239,6 +255,7 @@ export class InspectScene extends Phaser.Scene {
       three: kb.addKey(Phaser.Input.Keyboard.KeyCodes.THREE),
       four: kb.addKey(Phaser.Input.Keyboard.KeyCodes.FOUR),
       five: kb.addKey(Phaser.Input.Keyboard.KeyCodes.FIVE),
+      six: kb.addKey(Phaser.Input.Keyboard.KeyCodes.SIX),
       zero: kb.addKey(Phaser.Input.Keyboard.KeyCodes.ZERO),
       prev: kb.addKey(Phaser.Input.Keyboard.KeyCodes.OPEN_BRACKET),
       next: kb.addKey(Phaser.Input.Keyboard.KeyCodes.CLOSED_BRACKET),
@@ -328,6 +345,11 @@ export class InspectScene extends Phaser.Scene {
     }
     if (Phaser.Input.Keyboard.JustDown(this.keys.five)) {
       this.showControlPoints = !this.showControlPoints;
+      this.drawOverlay();
+      this.persistToggles();
+    }
+    if (Phaser.Input.Keyboard.JustDown(this.keys.six)) {
+      this.showDrs = !this.showDrs;
       this.drawOverlay();
       this.persistToggles();
     }
@@ -509,6 +531,40 @@ export class InspectScene extends Phaser.Scene {
       }
     }
 
+    if (this.showDrs && this.track.drsZones.length > 0) {
+      const cl = this.track.centerline;
+      const n = cl.length;
+      for (const zone of this.track.drsZones) {
+        // Cyan stripe along the centerline span [startIndex .. endIndex] (wraps).
+        this.overlay.lineStyle(8, 0x44ccff, 0.55);
+        this.overlay.beginPath();
+        let i = zone.startIndex;
+        this.overlay.moveTo(cl[i].x, cl[i].y);
+        while (i !== zone.endIndex) {
+          i = (i + 1) % n;
+          this.overlay.lineTo(cl[i].x, cl[i].y);
+        }
+        this.overlay.strokePath();
+
+        // Gates: detection in magenta, start/end in cyan. Each gate is a perpendicular line
+        // sized by the gate's outsideHalf + insideHalf so it visibly spans the asphalt.
+        this.drawGate(zone.detection, 0xff44ff);
+        this.drawGate(zone.start, 0x44ccff);
+        this.drawGate(zone.end, 0x44ccff);
+
+        const detTxt = this.add
+          .text(zone.detection.x, zone.detection.y, `D${zone.index}`, DRS_LABEL_STYLE)
+          .setOrigin(0.5, 1.6)
+          .setDepth(101);
+        const zoneTxt = this.add
+          .text(zone.start.x, zone.start.y, `DRS${zone.index}`, DRS_LABEL_STYLE)
+          .setOrigin(0.5, 1.6)
+          .setDepth(101);
+        this.labels.push(detTxt, zoneTxt);
+        this.worldObjects.push(detTxt, zoneTxt);
+      }
+    }
+
     if (this.showCheckpoints) {
       this.overlay.lineStyle(2, 0x00ffaa, 0.9);
       for (const cp of this.track.checkpoints) {
@@ -528,6 +584,16 @@ export class InspectScene extends Phaser.Scene {
       }
     }
     if (this.uiCam) this.uiCam.ignore(this.labels);
+  }
+
+  private drawGate(gate: { x: number; y: number; angle: number; outsideHalf: number; insideHalf: number }, color: number) {
+    const nx = -Math.sin(gate.angle);
+    const ny = Math.cos(gate.angle);
+    this.overlay.lineStyle(3, color, 0.95);
+    this.overlay.beginPath();
+    this.overlay.moveTo(gate.x - nx * gate.outsideHalf, gate.y - ny * gate.outsideHalf);
+    this.overlay.lineTo(gate.x + nx * gate.insideHalf, gate.y + ny * gate.insideHalf);
+    this.overlay.strokePath();
   }
 
   private fitView() {

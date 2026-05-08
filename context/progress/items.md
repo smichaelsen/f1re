@@ -10,6 +10,7 @@
 ### Items
 - **Boost** — 1.6× speed for 2s.
 - **Missile** — homing, locks on enemies in 220-unit radius.
+- **Seeker** — spawns 24px ahead on the centerline, follows the racing line at 520u/s until any non-owner enters a 140-unit lock radius, then homes in (one-way transition, same 4.5 rad/s turn cap as missile). 6s lifetime. Visual: cyan core + white halo. Same hit effect as missile (spin 1.2, shield-aware).
 - **Oil slick** — drop behind, spins anyone who hits it.
 - **Shield** — consumes one incoming hit.
 

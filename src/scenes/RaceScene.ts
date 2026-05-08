@@ -12,7 +12,23 @@ import { AudioBus } from "../audio/AudioBus";
 import { EngineSound } from "../audio/EngineSound";
 import { SkidSound } from "../audio/SkidSound";
 import { playPickupChime } from "../audio/PickupChime";
+import {
+  playBoostSfx,
+  playMissileLaunchSfx,
+  playSeekerLaunchSfx,
+  playOilDropSfx,
+  playShieldUpSfx,
+  playExplosionSfx,
+  playSpinoutSfx,
+  playShieldBlockSfx,
+  playWallThumpSfx,
+} from "../audio/ItemSfx";
 import { SkidMarks } from "../entities/SkidMarks";
+import { DustParticles } from "../entities/DustParticles";
+import { SparkParticles } from "../entities/SparkParticles";
+import { DrsAirflow } from "../entities/DrsAirflow";
+import { InputReader, type InputSource } from "../input/InputSource";
+import { defaultDrsModes, loadDrsModes, type DrsMode, type DrsModes } from "../input/DrsMode";
 
 interface RaceInit {
   trackKey?: TrackKey;
@@ -23,8 +39,12 @@ interface RaceInit {
   difficulty?: Difficulty;
   laps?: number;
   opponents?: number;
+  // Per-player input source. Index 0 = P1, 1 = P2. null = use default (1P auto / 2P legacy keyboard).
+  inputSources?: (InputSource | null)[];
+  // Per-player DRS activation mode. Falls back to localStorage / defaults when omitted.
+  drsModes?: DrsModes;
 }
-const ITEMS = ["boost", "missile", "oil", "shield"] as const;
+const ITEMS = ["boost", "missile", "seeker", "oil", "shield"] as const;
 type Item = (typeof ITEMS)[number];
 
 type RaceState = "countdown" | "racing" | "finished";
@@ -56,6 +76,20 @@ interface Missile {
   expiresAt: number;
 }
 
+interface Seeker {
+  sprite: Phaser.GameObjects.Graphics;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  owner: Car;
+  expiresAt: number;
+  // While following the racing line: index of the next centerline node to steer toward.
+  // Set to null on target lock — the seeker then homes in like a missile and never returns
+  // to the centerline (one-way transition).
+  nodeIdx: number | null;
+}
+
 interface AISkillState {
   skill: number;
   aimOffset: number;
@@ -66,7 +100,37 @@ const AIM_CHUNK_SIZE = 6;
 const AIM_OFFSET_FLOOR = 0.05;
 const AIM_OFFSET_RANGE = 0.5;
 
-const NO_INPUT: CarInput = { throttle: 0, brake: 0, steer: 0, useItem: false };
+const NO_INPUT: CarInput = { throttle: 0, brake: 0, steer: 0, useItem: false, useDrs: false };
+
+// Eligibility window: chaser within this many ms of the prior crosser at a detection point gets DRS.
+const DRS_GAP_MS = 1000;
+// Auto activation delay after crossing the zone-start gate. Same value for human auto mode and the
+// AI base; AI adds skill-driven jitter on top.
+const DRS_AUTO_DELAY_MS = 200;
+// AI activation timing (ms): base + (1 - skill) * skillSpread + uniform jitter ±jitter.
+const DRS_AI_SKILL_SPREAD = 600;
+const DRS_AI_JITTER = 200;
+
+interface DetectionRecord {
+  car: Car;
+  t: number;
+  // The car's lap counter at crossing time. Used by the chaser lookup to filter out crossings
+  // from earlier/later laps (lapping cars) so the gap is only computed against same-lap traffic.
+  lap: number;
+}
+
+interface DrsCarState {
+  // Index of the zone whose start gate the car most recently passed AND for which it was eligible.
+  // null while not currently inside a DRS zone (or while ineligible for the current one).
+  insideZoneIdx: number | null;
+  // Auto mode: ms timestamp after which DRS becomes active. Cleared when fired or zone ends.
+  scheduledActivateAt: number | null;
+  // The zone index that drsAvailable currently refers to. Cleared at zone end.
+  availableForZoneIdx: number | null;
+  // Per-zone-gate "currently inside band" flags for edge detection. Indexed
+  // `zoneIdx * 3 + (0|1|2)` for detection / start / end.
+  prevTouching: boolean[];
+}
 
 export class RaceScene extends Phaser.Scene {
   // humans[0] is always the primary player (P1). humans.length === 2 in 2P mode.
@@ -94,17 +158,24 @@ export class RaceScene extends Phaser.Scene {
   pickups: Pickup[] = [];
   oilSlicks: OilSlick[] = [];
   missiles: Missile[] = [];
+  seekers: Seeker[] = [];
 
   private aiSkill = new Map<Car, AISkillState>();
   private audioBus: AudioBus | null = null;
   private engines = new Map<Car, EngineSound>();
   private skids = new Map<Car, SkidSound>();
   private skidMarks: SkidMarks | null = null;
+  private dust: DustParticles | null = null;
+  private sparks: SparkParticles | null = null;
+  private drsAirflow: DrsAirflow | null = null;
 
   state: RaceState = "countdown";
   countdownStartedAt = 0;
   raceStartedAt = 0;
   raceEndedAt = 0;
+  // Session-wide fastest lap (across all cars in the current race). Drives the
+  // "FASTEST LAP <name>" broadcast; per-car PBs live on Car.bestLapMs.
+  sessionBestLapMs: number | null = null;
 
   trackKey: TrackKey = "oval";
   teamId: TeamId = DEFAULT_TEAM_ID;
@@ -113,6 +184,19 @@ export class RaceScene extends Phaser.Scene {
   difficulty: Difficulty = "normal";
   totalLaps: number = 3;
   opponentCount: number = 3;
+  // Per-player input source. inputSources[i] resolves the controls for humans[i].
+  // null entries fall back to defaults (1P auto, 2P legacy keyboard schemes).
+  inputSources: (InputSource | null)[] = [];
+  inputReader!: InputReader;
+  // Per-player DRS auto/manual mode. Index 0 = P1, 1 = P2. AI cars always use auto.
+  drsModes: DrsModes = defaultDrsModes();
+  // Becomes true on the frame the leader completes their first lap. Detection points only grant
+  // eligibility while this is true; crossings logged before then are kept so the first post-enable
+  // chaser can still find a prior crosser to compare against.
+  drsEnabled = false;
+  // Per-zone append-only crossing log. detectionLog[zoneIdx] is ordered by time.
+  drsDetectionLog: DetectionRecord[][] = [];
+  drsState = new Map<Car, DrsCarState>();
   escapeKey!: Phaser.Input.Keyboard.Key;
   uiCam!: Phaser.Cameras.Scene2D.Camera;
 
@@ -128,6 +212,8 @@ export class RaceScene extends Phaser.Scene {
     this.difficulty = data.difficulty ?? "normal";
     this.totalLaps = Phaser.Math.Clamp(data.laps ?? 3, LAPS_MIN, LAPS_MAX);
     this.opponentCount = Phaser.Math.Clamp(data.opponents ?? 3, OPPONENTS_MIN, OPPONENTS_MAX);
+    this.inputSources = (data.inputSources ?? []).slice(0, this.playerCount);
+    this.drsModes = data.drsModes ?? loadDrsModes();
   }
 
   preload() {
@@ -144,20 +230,31 @@ export class RaceScene extends Phaser.Scene {
     this.pickups = [];
     this.oilSlicks = [];
     this.missiles = [];
+    this.seekers = [];
     this.aiSkill.clear();
     this.engines.clear();
     this.skids.clear();
     this.audioBus = null;
     this.skidMarks = null;
+    this.dust = null;
+    this.sparks = null;
+    this.drsAirflow = null;
     this.hud2 = null;
     this.state = "countdown";
     this.raceStartedAt = 0;
     this.raceEndedAt = 0;
+    this.sessionBestLapMs = null;
+    this.drsEnabled = false;
+    this.drsDetectionLog = [];
+    this.drsState.clear();
 
     const raw = this.cache.json.get(`track-${this.trackKey}`);
     this.track = Track.fromData(this, parseTrackData(raw));
 
     this.skidMarks = this.createSkidMarks();
+    this.dust = new DustParticles(this);
+    this.sparks = new SparkParticles(this);
+    this.drsAirflow = new DrsAirflow(this);
 
     // Spawn humans into grid slots 0..N-1. Each gets playerIndex 0/1 so per-player HUDs and
     // per-player flashes can later route by index. Slot 0 is pole, slot 1 is the row behind.
@@ -222,6 +319,17 @@ export class RaceScene extends Phaser.Scene {
     }
     this.cars = [...this.humans, ...this.ai];
 
+    const zoneCount = this.track.drsZones.length;
+    this.drsDetectionLog = Array.from({ length: zoneCount }, () => []);
+    for (const car of this.cars) {
+      this.drsState.set(car, {
+        insideZoneIdx: null,
+        scheduledActivateAt: null,
+        availableForZoneIdx: null,
+        prevTouching: new Array(zoneCount * 3).fill(false),
+      });
+    }
+
     this.spawnPickups(8);
 
     this.cameras.main.setBounds(-3000, -3000, 6000, 6000);
@@ -237,8 +345,8 @@ export class RaceScene extends Phaser.Scene {
       this.cameras.main.centerOn(this.player.x, this.player.y);
     }
 
-    this.hud = new Hud(this, "left");
-    if (this.humans.length === 2) this.hud2 = new Hud(this, "right");
+    this.hud = new Hud(this, "left", this.cars.length);
+    if (this.humans.length === 2) this.hud2 = new Hud(this, "right", this.cars.length);
     this.touch = new TouchControls(this);
 
     this.uiCam = this.cameras.add(0, 0, this.scale.width, this.scale.height);
@@ -261,6 +369,7 @@ export class RaceScene extends Phaser.Scene {
     this.enterKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER);
     this.restartKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.R);
     this.escapeKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
+    this.inputReader = new InputReader(this);
 
     this.state = "countdown";
     this.countdownStartedAt = this.time.now;
@@ -269,10 +378,16 @@ export class RaceScene extends Phaser.Scene {
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.disposeAudio();
       this.skidMarks = null;
+      this.dust = null;
+      this.sparks = null;
+      this.drsAirflow = null;
     });
     this.events.once(Phaser.Scenes.Events.DESTROY, () => {
       this.disposeAudio();
       this.skidMarks = null;
+      this.dust = null;
+      this.sparks = null;
+      this.drsAirflow = null;
     });
   }
 
@@ -350,6 +465,52 @@ export class RaceScene extends Phaser.Scene {
     this.skidMarks.endFrame();
   }
 
+  // Probe each car's two rear corners. Whenever a rear corner is on a non-asphalt surface
+  // and the car is moving fast enough to actually kick up dirt, emit one dust puff there.
+  // Per-frame emission means the visual density auto-scales with frame rate for a moment, but
+  // the puffs themselves have absolute lifespans so the cloud size is bounded.
+  private updateDust() {
+    if (!this.dust) return;
+    if (this.state !== "racing") return;
+    const SPEED_FLOOR = 60;
+    for (const car of this.cars) {
+      if (car.speed < SPEED_FLOOR) continue;
+      const corners = car.corners();
+      // corners() order is [rear-left, front-left, front-right, rear-right] in body local space.
+      const rearCorners = [corners[0], corners[3]];
+      for (const c of rearCorners) {
+        const surf = this.track.surfaceAt(c.x, c.y);
+        if (surf === "asphalt") continue;
+        this.dust.emitAt(c.x, c.y, 1);
+      }
+    }
+  }
+
+  // For each car with drsActive AND speed above the floor, spawn a single airflow streak behind
+  // the rear wing each frame, alternating left/right rear corners so the trail reads as twin
+  // streaks without doubling the per-frame particle count. Tuned subtle — DRS shouldn't visually
+  // dominate the screen, just hint at the slipstream.
+  private drsAirflowParity = false;
+  private updateDrsAirflow() {
+    if (!this.drsAirflow) return;
+    if (this.state !== "racing") return;
+    const SPEED_FLOOR = 260;
+    this.drsAirflowParity = !this.drsAirflowParity;
+    const sideSign = this.drsAirflowParity ? 1 : -1;
+    for (const car of this.cars) {
+      if (!car.drsActive) continue;
+      if (car.speed < SPEED_FLOOR) continue;
+      const fx = Math.cos(car.heading);
+      const fy = Math.sin(car.heading);
+      const rearX = car.x - fx * (car.halfLength - 2);
+      const rearY = car.y - fy * (car.halfLength - 2);
+      const lateral = car.halfWidth * 0.5 * sideSign;
+      const lx = -fy * lateral;
+      const ly = fx * lateral;
+      this.drsAirflow.emitAt(rearX + lx, rearY + ly, -fx, -fy);
+    }
+  }
+
   private updateAudio() {
     if (!this.audioBus) return;
     const now = this.time.now;
@@ -421,18 +582,24 @@ export class RaceScene extends Phaser.Scene {
     if (this.state === "countdown") {
       this.runCountdown(now);
       for (const c of this.cars) c.update(dt, NO_INPUT);
-      // Audio-only throttle on the grid so the engine revs pre-race. We read keys directly
-      // (instead of routing through humanInput) so the touch's one-shot useItem latch stays
-      // armed for the moment the race starts.
+      // Audio-only throttle on the grid so the engine revs pre-race. Bypass humanInput so the
+      // touch's one-shot useItem latch (and pad east-button edge state) stays armed for the
+      // moment the race starts. readThrottle/readAutoThrottle are deliberately side-effect-free.
       const t = this.touch.state;
-      if (this.humans.length === 1) {
-        const held = this.cursors.up?.isDown || t.throttle;
-        this.humans[0].audioThrottle = held ? 1 : 0;
-      } else {
-        const p1Held = this.wKey.isDown || t.throttle;
-        const p2Held = this.cursors.up?.isDown ?? false;
-        this.humans[0].audioThrottle = p1Held ? 1 : 0;
-        this.humans[1].audioThrottle = p2Held ? 1 : 0;
+      for (let i = 0; i < this.humans.length; i++) {
+        const explicit = this.inputSources[i] ?? null;
+        let throttle: number;
+        if (explicit) {
+          throttle = this.inputReader.readThrottle(explicit);
+        } else if (this.humans.length === 1) {
+          throttle = this.inputReader.readAutoThrottle();
+        } else {
+          const fallback: InputSource =
+            i === 0 ? { kind: "keyboard", scheme: "wasd" } : { kind: "keyboard", scheme: "arrows" };
+          throttle = this.inputReader.readThrottle(fallback);
+        }
+        if (i === 0 && t.throttle) throttle = 1;
+        this.humans[i].audioThrottle = throttle;
       }
       for (const ai of this.ai) ai.audioThrottle = 0;
     } else {
@@ -506,39 +673,38 @@ export class RaceScene extends Phaser.Scene {
     return { x: pts[idx].x, y: pts[idx].y, heading: this.track.startHeading };
   }
 
-  // Maps player index → CarInput. In 1P, P0 reads arrow keys + Space + touch (existing scheme).
-  // In 2P, P0 reads WASD + Space (touch still feeds P0) and P1 reads arrow keys + Enter.
-  // Touch always drives P0; sharing a phone between two players isn't a sensible UX.
+  // Maps player index → CarInput via InputReader. 1P uses readAuto (kb arrows + first pad
+  // merged). 2P uses an explicit InputSource per slot (assigned in MenuScene press-to-join);
+  // when no source was provided, falls back to legacy schemes (P0: WASD+Space, P1: arrows+Enter).
+  // Touch always feeds P0 — sharing a phone between two players isn't a sensible UX.
   private humanInput(playerIndex: number): CarInput {
     const t = this.touch.state;
-    if (this.humans.length === 1) {
-      return {
-        throttle: this.cursors.up?.isDown || t.throttle ? 1 : 0,
-        brake: this.cursors.down?.isDown || t.brake ? 1 : 0,
-        steer:
-          (this.cursors.right?.isDown || t.right ? 1 : 0) -
-          (this.cursors.left?.isDown || t.left ? 1 : 0),
-        useItem: Phaser.Input.Keyboard.JustDown(this.spaceKey) || this.touch.consumeUseItem(),
-      };
+    const explicit = this.inputSources[playerIndex] ?? null;
+
+    let base: CarInput;
+    if (explicit) {
+      base = this.inputReader.read(explicit);
+    } else if (this.humans.length === 1) {
+      base = this.inputReader.readAuto();
+    } else {
+      const fallback: InputSource =
+        playerIndex === 0
+          ? { kind: "keyboard", scheme: "wasd" }
+          : { kind: "keyboard", scheme: "arrows" };
+      base = this.inputReader.read(fallback);
     }
-    if (playerIndex === 0) {
-      return {
-        throttle: this.wKey.isDown || t.throttle ? 1 : 0,
-        brake: this.sKey.isDown || t.brake ? 1 : 0,
-        steer:
-          (this.dKey.isDown || t.right ? 1 : 0) -
-          (this.aKey.isDown || t.left ? 1 : 0),
-        useItem: Phaser.Input.Keyboard.JustDown(this.spaceKey) || this.touch.consumeUseItem(),
-      };
-    }
-    // P2 (index 1).
+
+    if (playerIndex !== 0) return base;
+
+    let steer = base.steer;
+    if (t.right && !t.left) steer = Math.max(steer, 1);
+    if (t.left && !t.right) steer = Math.min(steer, -1);
     return {
-      throttle: this.cursors.up?.isDown ? 1 : 0,
-      brake: this.cursors.down?.isDown ? 1 : 0,
-      steer:
-        (this.cursors.right?.isDown ? 1 : 0) -
-        (this.cursors.left?.isDown ? 1 : 0),
-      useItem: Phaser.Input.Keyboard.JustDown(this.enterKey),
+      throttle: Math.max(base.throttle, t.throttle ? 1 : 0),
+      brake: Math.max(base.brake, t.brake ? 1 : 0),
+      steer,
+      useItem: base.useItem || this.touch.consumeUseItem(),
+      useDrs: base.useDrs,
     };
   }
 
@@ -629,6 +795,7 @@ export class RaceScene extends Phaser.Scene {
       human.update(dt, input, this.surfaceFeel(human));
       if (active && input.useItem) this.useItem(human);
       this.applyTrackBounds(human);
+      if (active) this.updateDrsForCar(human, input, now);
     }
 
     for (const ai of this.ai) {
@@ -640,12 +807,16 @@ export class RaceScene extends Phaser.Scene {
       if (aiActive && ai.itemSlot && ai.useItemAt != null && now >= ai.useItemAt) {
         this.useItem(ai);
       }
+      if (aiActive) this.updateDrsForCar(ai, input, now);
     }
 
     this.updatePickups();
     this.updateOilSlicks(dt);
     this.updateMissiles(dt);
+    this.updateSeekers(dt);
     this.updateSkidMarks(dt);
+    this.updateDust();
+    this.updateDrsAirflow();
     for (const c of this.cars) this.updateLapTracking(c, now);
     this.handleCarCollisions();
 
@@ -689,6 +860,8 @@ export class RaceScene extends Phaser.Scene {
     let worstOverflow = 0;
     let worstNx = 0;
     let worstNy = 0;
+    let worstHitX = 0;
+    let worstHitY = 0;
     for (const c of car.corners()) {
       const probe = this.track.probe(c.x, c.y);
       const wallAt = this.track.wallOffset(probe.side, probe.index);
@@ -697,6 +870,8 @@ export class RaceScene extends Phaser.Scene {
         worstOverflow = overflow;
         worstNx = probe.nx;
         worstNy = probe.ny;
+        worstHitX = c.x;
+        worstHitY = c.y;
       }
     }
 
@@ -716,7 +891,145 @@ export class RaceScene extends Phaser.Scene {
       const newVt = vt * tangentialScrub;
       car.vx = worstNx * newVn + tx * newVt;
       car.vy = worstNy * newVn + ty * newVt;
+
+      // Spark burst on actual impact. Threshold filters out the constant wall-hugging contact
+      // when a car drifts along a wall. Count scales with normal-velocity magnitude.
+      const SPARK_VN_THRESHOLD = 60;
+      if (vn > SPARK_VN_THRESHOLD) {
+        // Push the emit point slightly off the wall so sparks don't visually clip into it.
+        const hx = worstHitX - worstNx * 2;
+        const hy = worstHitY - worstNy * 2;
+        if (this.sparks) {
+          const count = Math.min(20, Math.round(vn / 18));
+          this.sparks.burst(hx, hy, count);
+        }
+        if (this.audioBus) {
+          // Map vn 60 → ~0, vn 360 → 1. Same threshold as sparks so visual + audio agree.
+          const intensity = Math.min(1, (vn - SPARK_VN_THRESHOLD) / 300);
+          playWallThumpSfx(this.audioBus, hx, hy, intensity);
+        }
+      }
     }
+  }
+
+  // Per-car DRS state machine. Runs once per active car per frame *after* car.update + applyTrackBounds
+  // so that any wall collisions have already settled the position. Uses the gateHit band test on
+  // detection / start / end gates of every zone, with edge detection (was-not-touching →
+  // is-touching) to decide what happens. Also handles auto-activation timer fire and lift-cancel.
+  private updateDrsForCar(car: Car, input: CarInput, now: number) {
+    const zones = this.track.drsZones;
+    if (zones.length === 0) return;
+    const state = this.drsState.get(car);
+    if (!state) return;
+
+    for (let z = 0; z < zones.length; z++) {
+      const zone = zones[z];
+      const baseIdx = z * 3;
+      const detTouching = this.track.gateHit(zone.detection, car.x, car.y);
+      const startTouching = this.track.gateHit(zone.start, car.x, car.y);
+      const endTouching = this.track.gateHit(zone.end, car.x, car.y);
+
+      const detEnter = detTouching && !state.prevTouching[baseIdx];
+      const startEnter = startTouching && !state.prevTouching[baseIdx + 1];
+      const endEnter = endTouching && !state.prevTouching[baseIdx + 2];
+
+      state.prevTouching[baseIdx] = detTouching;
+      state.prevTouching[baseIdx + 1] = startTouching;
+      state.prevTouching[baseIdx + 2] = endTouching;
+
+      if (detEnter) this.onDrsDetectionCross(car, state, z, now);
+      if (startEnter) this.onDrsZoneStart(car, state, z, now);
+      if (endEnter) this.onDrsZoneEnd(car, state, z);
+    }
+
+    // Auto activation: fire when the scheduled timestamp elapses, but only if still inside the
+    // zone we scheduled it for (the end-gate handler clears it on zone exit).
+    if (state.scheduledActivateAt != null && now >= state.scheduledActivateAt && !car.drsActive) {
+      car.drsActive = true;
+      state.scheduledActivateAt = null;
+    }
+
+    // Manual activation (humans only — AI never sets useDrs). Pressing the DRS key inside the
+    // zone re-arms drsActive even after a lift-cancel, as long as drsAvailable is still true.
+    if (
+      input.useDrs &&
+      car.drsAvailable &&
+      !car.drsActive &&
+      state.insideZoneIdx != null &&
+      this.modeForCar(car) === "manual"
+    ) {
+      car.drsActive = true;
+      state.scheduledActivateAt = null;
+    }
+
+    // Lift / brake cancels DRS. Doesn't clear drsAvailable — chaser can re-trigger via manual press.
+    if (car.drsActive && (input.throttle === 0 || input.brake > 0)) {
+      car.drsActive = false;
+      state.scheduledActivateAt = null;
+    }
+  }
+
+  private onDrsDetectionCross(car: Car, state: DrsCarState, zoneIdx: number, now: number) {
+    const log = this.drsDetectionLog[zoneIdx];
+    // Look up the most recent prior crosser on the *same* lap, excluding this car. Lap matching is
+    // important: a leader's lap-2 crossing is irrelevant to a chaser's lap-1 crossing of the same
+    // detection point. Walks backward; first match wins.
+    let priorT: number | null = null;
+    for (let i = log.length - 1; i >= 0; i--) {
+      const r = log[i];
+      if (r.car === car) continue;
+      if (r.lap !== car.lap) continue;
+      priorT = r.t;
+      break;
+    }
+
+    log.push({ car, t: now, lap: car.lap });
+
+    // Reset eligibility on every detection cross — a previously-eligible car who didn't activate
+    // before reaching the next detection loses DRS regardless. Then re-grant if gap qualifies.
+    car.drsAvailable = false;
+    state.availableForZoneIdx = null;
+    if (!this.drsEnabled || priorT == null) return;
+    const gap = now - priorT;
+    if (gap > 0 && gap <= DRS_GAP_MS) {
+      car.drsAvailable = true;
+      state.availableForZoneIdx = zoneIdx;
+    }
+  }
+
+  private onDrsZoneStart(car: Car, state: DrsCarState, zoneIdx: number, now: number) {
+    if (!car.drsAvailable || state.availableForZoneIdx !== zoneIdx) return;
+    state.insideZoneIdx = zoneIdx;
+    if (this.modeForCar(car) === "auto") {
+      state.scheduledActivateAt = now + this.drsAutoActivationDelay(car);
+    }
+  }
+
+  private onDrsZoneEnd(car: Car, state: DrsCarState, zoneIdx: number) {
+    // Only respond to the end gate of the zone we're actually inside. Stops a rogue end-gate
+    // cross (e.g. wrong-zone overlap on chicane geometry) from clobbering an active DRS.
+    if (state.insideZoneIdx !== zoneIdx) return;
+    car.drsActive = false;
+    car.drsAvailable = false;
+    state.scheduledActivateAt = null;
+    state.availableForZoneIdx = null;
+    state.insideZoneIdx = null;
+  }
+
+  private modeForCar(car: Car): DrsMode {
+    if (car.playerIndex === 0) return this.drsModes.p1;
+    if (car.playerIndex === 1) return this.drsModes.p2;
+    return "auto";
+  }
+
+  // Auto-activation delay (ms). Humans get a flat 200ms; AI gets a skill-driven base + jitter so
+  // weaker AI react slower and there's some variation across opponents.
+  private drsAutoActivationDelay(car: Car): number {
+    if (car.isPlayer) return DRS_AUTO_DELAY_MS;
+    const skill = this.aiSkill.get(car)?.skill ?? 0.7;
+    const base = DRS_AUTO_DELAY_MS + (1 - skill) * DRS_AI_SKILL_SPREAD;
+    const jitter = (Math.random() * 2 - 1) * DRS_AI_JITTER;
+    return Math.max(0, base + jitter);
   }
 
   private aiInput(ai: Car): CarInput {
@@ -731,6 +1044,7 @@ export class RaceScene extends Phaser.Scene {
       brake: wantSlow ? 0.3 : 0,
       steer,
       useItem: false,
+      useDrs: false,
     };
   }
 
@@ -826,21 +1140,31 @@ export class RaceScene extends Phaser.Scene {
     const item = car.itemSlot as Item;
     car.itemSlot = null;
     car.useItemAt = null;
+    const bus = this.audioBus;
     switch (item) {
       case "boost":
         car.giveBoost(2.0);
+        if (bus) playBoostSfx(bus, car.x, car.y);
         this.flashFor(car, "BOOST!", 700);
         break;
       case "missile":
         this.fireMissile(car);
+        if (bus) playMissileLaunchSfx(bus, car.x, car.y);
         this.flashFor(car, "MISSILE!", 700);
+        break;
+      case "seeker":
+        this.fireSeeker(car);
+        if (bus) playSeekerLaunchSfx(bus, car.x, car.y);
+        this.flashFor(car, "SEEKER!", 700);
         break;
       case "oil":
         this.dropOil(car);
+        if (bus) playOilDropSfx(bus, car.x, car.y);
         this.flashFor(car, "OIL!", 700);
         break;
       case "shield":
         car.shielded = true;
+        if (bus) playShieldUpSfx(bus, car.x, car.y);
         this.flashFor(car, "SHIELD!", 700);
         break;
     }
@@ -851,6 +1175,13 @@ export class RaceScene extends Phaser.Scene {
     if (car.playerIndex == null) return;
     const hud = car.playerIndex === 0 ? this.hud : this.hud2;
     hud?.flash(text, ms);
+  }
+
+  // Session-wide broadcast (e.g. new fastest lap, DRS enabled). Routed to the left HUD's
+  // dedicated broadcast slot, which renders once at screen center — even in 2P, where the
+  // per-player `flash()` slots are offset to either side.
+  private flashAll(text: string, ms: number) {
+    this.hud.broadcast(text, ms);
   }
 
   private fireMissile(owner: Car) {
@@ -907,7 +1238,11 @@ export class RaceScene extends Phaser.Scene {
       for (const c of this.cars) {
         if (c === m.owner) continue;
         if (Phaser.Math.Distance.Between(c.x, c.y, m.x, m.y) < 22) {
-          if (!c.spin(1.2)) this.spawnShieldFlash(c);
+          if (c.spin(1.2)) {
+            if (this.audioBus) playExplosionSfx(this.audioBus, c.x, c.y);
+          } else {
+            this.spawnShieldFlash(c);
+          }
           hit = true;
           break;
         }
@@ -916,6 +1251,128 @@ export class RaceScene extends Phaser.Scene {
       if (hit || now > m.expiresAt) {
         m.sprite.destroy();
         this.missiles.splice(i, 1);
+      }
+    }
+  }
+
+  private fireSeeker(owner: Car) {
+    const speed = 520;
+    const cl = this.track.centerline;
+    const n = cl.length;
+    if (n < 2) return;
+
+    // Walk forward along the centerline ~24 px from the firing car's projected position.
+    // probe.index already gives us a forward-leaning node (it advances when t >= 0.5),
+    // so we start from there and accumulate segment lengths until we cover the offset.
+    const probe = this.track.probe(owner.x, owner.y);
+    let idx = probe.index;
+    let acc = Math.hypot(cl[idx].x - owner.x, cl[idx].y - owner.y);
+    let safety = n;
+    while (acc < 24 && safety-- > 0) {
+      const next = (idx + 1) % n;
+      acc += Math.hypot(cl[next].x - cl[idx].x, cl[next].y - cl[idx].y);
+      idx = next;
+    }
+    const sx = cl[idx].x;
+    const sy = cl[idx].y;
+    const nodeIdx = (idx + 1) % n;
+    const tdx = cl[nodeIdx].x - sx;
+    const tdy = cl[nodeIdx].y - sy;
+    const tlen = Math.hypot(tdx, tdy) || 1;
+
+    const g = this.add.graphics();
+    g.fillStyle(0x40e0ff, 1);
+    g.fillCircle(0, 0, 5);
+    g.lineStyle(2, 0xffffff, 1);
+    g.strokeCircle(0, 0, 8);
+    g.setDepth(8);
+    g.setPosition(sx, sy);
+    this.uiCam.ignore(g);
+
+    this.seekers.push({
+      sprite: g,
+      x: sx,
+      y: sy,
+      vx: (tdx / tlen) * speed,
+      vy: (tdy / tlen) * speed,
+      owner,
+      expiresAt: this.time.now + 6000,
+      nodeIdx,
+    });
+  }
+
+  private updateSeekers(dt: number) {
+    const now = this.time.now;
+    const cl = this.track.centerline;
+    const n = cl.length;
+    const speed = 520;
+    const lockRadius = 140;
+    const advanceR2 = 144; // 12 px node-arrival threshold
+
+    for (let i = this.seekers.length - 1; i >= 0; i--) {
+      const s = this.seekers[i];
+      s.x += s.vx * dt;
+      s.y += s.vy * dt;
+      s.sprite.setPosition(s.x, s.y);
+
+      // Find nearest non-owner; gates the lock-on transition.
+      let nearest: Car | null = null;
+      let nearestD = Infinity;
+      for (const c of this.cars) {
+        if (c === s.owner) continue;
+        const d = Phaser.Math.Distance.Between(c.x, c.y, s.x, s.y);
+        if (d < nearestD) { nearestD = d; nearest = c; }
+      }
+
+      if (s.nodeIdx != null && nearest && nearestD < lockRadius) {
+        // First-time lock-on. Drop the centerline state — from here on it homes like a missile.
+        s.nodeIdx = null;
+      }
+
+      if (s.nodeIdx == null) {
+        // Homing mode: same turn-cap behaviour as the missile, no range gate once locked.
+        if (nearest) {
+          const ang = Math.atan2(nearest.y - s.y, nearest.x - s.x);
+          const cur = Math.atan2(s.vy, s.vx);
+          const turn = 4.5 * dt;
+          const newAng = cur + Phaser.Math.Clamp(Phaser.Math.Angle.Wrap(ang - cur), -turn, turn);
+          s.vx = Math.cos(newAng) * speed;
+          s.vy = Math.sin(newAng) * speed;
+        }
+      } else {
+        // Centerline-follow: steer straight at the next node, advance when we're close enough.
+        let safety = n;
+        let target = cl[s.nodeIdx];
+        let dx = target.x - s.x;
+        let dy = target.y - s.y;
+        while (dx * dx + dy * dy < advanceR2 && safety-- > 0) {
+          s.nodeIdx = (s.nodeIdx + 1) % n;
+          target = cl[s.nodeIdx];
+          dx = target.x - s.x;
+          dy = target.y - s.y;
+        }
+        const len = Math.hypot(dx, dy) || 1;
+        s.vx = (dx / len) * speed;
+        s.vy = (dy / len) * speed;
+      }
+
+      let hit = false;
+      for (const c of this.cars) {
+        if (c === s.owner) continue;
+        if (Phaser.Math.Distance.Between(c.x, c.y, s.x, s.y) < 22) {
+          if (c.spin(1.2)) {
+            if (this.audioBus) playExplosionSfx(this.audioBus, c.x, c.y);
+          } else {
+            this.spawnShieldFlash(c);
+          }
+          hit = true;
+          break;
+        }
+      }
+
+      if (hit || now > s.expiresAt) {
+        s.sprite.destroy();
+        this.seekers.splice(i, 1);
       }
     }
   }
@@ -947,7 +1404,11 @@ export class RaceScene extends Phaser.Scene {
       }
       for (const c of this.cars) {
         if (Phaser.Math.Distance.Between(c.x, c.y, o.x, o.y) < 22) {
-          if (!c.spin(0.9)) this.spawnShieldFlash(c);
+          if (c.spin(0.9)) {
+            if (this.audioBus) playSpinoutSfx(this.audioBus, c.x, c.y);
+          } else {
+            this.spawnShieldFlash(c);
+          }
           o.sprite.destroy();
           this.oilSlicks.splice(i, 1);
           break;
@@ -957,6 +1418,7 @@ export class RaceScene extends Phaser.Scene {
   }
 
   private spawnShieldFlash(car: Car) {
+    if (this.audioBus) playShieldBlockSfx(this.audioBus, car.x, car.y);
     const g = this.add.graphics();
     g.setDepth(9);
     this.uiCam.ignore(g);
@@ -1026,12 +1488,24 @@ export class RaceScene extends Phaser.Scene {
     if (cp !== 0) return;
 
     const lapMs = now - car.currentLapStartMs;
-    if (car.bestLapMs == null || lapMs < car.bestLapMs) {
-      car.bestLapMs = lapMs;
-      this.flashFor(car, "BEST LAP!", 1500);
+    const beatPersonal = car.bestLapMs == null || lapMs < car.bestLapMs;
+    if (beatPersonal) car.bestLapMs = lapMs;
+    const beatSession = this.sessionBestLapMs == null || lapMs < this.sessionBestLapMs;
+    if (beatSession) {
+      this.sessionBestLapMs = lapMs;
+      this.flashAll(`FASTEST LAP ${car.name}`, 1500);
+    } else if (beatPersonal) {
+      this.flashFor(car, "PERSONAL BEST", 1500);
     }
     car.currentLapStartMs = now;
     car.lap++;
+
+    // First time any car completes lap 1 → DRS becomes active for the rest of the race.
+    // Skipped entirely on tracks without DRS data so we don't broadcast a meaningless message.
+    if (!this.drsEnabled && car.lap >= 1 && this.track.drsZones.length > 0) {
+      this.drsEnabled = true;
+      this.flashAll("DRS ENABLED", 1500);
+    }
 
     const winnerAlreadyFinished = this.cars.some((c) => c.finishedAtMs != null);
     if (car.lap >= this.totalLaps || winnerAlreadyFinished) {
@@ -1136,11 +1610,14 @@ export class RaceScene extends Phaser.Scene {
     const positions = this.computePositions();
     const multi = this.humans.length === 2;
 
-    // Drive each visible HUD slot from its corresponding human car.
-    const slots: { hud: Hud; car: Car; useKey: string }[] = [
-      { hud: this.hud, car: this.humans[0], useKey: multi ? "SPACE" : "SPACE" },
+    // Drive each visible HUD slot from its corresponding human car. Key labels mirror the
+    // existing handedness convention: SPACE/Q belong to the WASD scheme (P0), ENTER/SHIFT to the
+    // arrows scheme (P1). 1P readAuto accepts both, so either label works in 1P.
+    const slots: { hud: Hud; car: Car; useKey: string; drsKey: string }[] = [
+      { hud: this.hud, car: this.humans[0], useKey: "SPACE", drsKey: "Q" },
     ];
-    if (multi && this.hud2) slots.push({ hud: this.hud2, car: this.humans[1], useKey: "ENTER" });
+    if (multi && this.hud2)
+      slots.push({ hud: this.hud2, car: this.humans[1], useKey: "ENTER", drsKey: "SHIFT" });
 
     for (const s of slots) {
       s.hud.setSpeed(s.car.speed * 0.36);
@@ -1148,6 +1625,13 @@ export class RaceScene extends Phaser.Scene {
       s.hud.setTime(elapsed);
       s.hud.setBest(s.car.bestLapMs);
       s.hud.setItem(s.car.itemSlot, s.useKey);
+      const manual = this.modeForCar(s.car) === "manual";
+      const drsState = s.car.drsActive
+        ? "active"
+        : s.car.drsAvailable
+          ? "available"
+          : "off";
+      s.hud.setDrs(drsState, manual ? s.drsKey : "auto");
     }
     // Position panel only lives on the left HUD; in 2P it's repositioned to bottom-center.
     this.hud.setPositions(positions, this.totalLaps);

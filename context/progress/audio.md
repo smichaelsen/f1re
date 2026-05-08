@@ -47,6 +47,25 @@ Listener-relative positional audio. Player car is the listener; every sound sour
 - Positional gain sampled once at trigger time via `AudioBus.instantaneousGain(x, y)` — no per-frame tracking; the chime is too short for listener movement to matter. Nodes self-disconnect on `onended`.
 - Triggered in `RaceScene.updatePickups` at the moment a car (player or AI) collects a pickup, played at the pickup's world position.
 
+### Item + hit SFX (synthetic)
+- `src/audio/ItemSfx.ts` exports eight one-shots, each fire-and-forget with positional gain sampled at trigger time. Same node-graph and self-disconnect pattern as `PickupChime`. A shared `noiseBuffer(ctx)` cache provides a 600 ms white-noise `AudioBuffer` reused across calls (created once per `AudioContext`).
+- **Activation sounds** (triggered in `RaceScene.useItem`, played at the firing car's position):
+  - `playBoostSfx` — saw 180→720 Hz + bandpassed noise sweep, ~360 ms.
+  - `playMissileLaunchSfx` — aggressive saw 880→180 Hz + highpassed noise crackle, ~280 ms.
+  - `playSeekerLaunchSfx` — sci-fi square+sine sweep 520→1800 Hz / 1040→3600 Hz, ~260 ms.
+  - `playOilDropSfx` — lowpassed noise burst (800→180 Hz) + 120→60 Hz sub thud, ~200 ms.
+  - `playShieldUpSfx` — triangle stepped C5→G5→D6→G6 + C7→G7 sparkle, ~420 ms.
+- **Impact sounds** (triggered at car position when `Car.spin()` returns truthy, i.e. the hit landed):
+  - `playExplosionSfx` — noise burst with 2400→180 Hz lowpass sweep + 160→45 Hz sub. Used for missile and seeker hits.
+  - `playSpinoutSfx` — saw 640→120 Hz + sine 220→80 Hz descending slide. Used for oil-slick hits.
+- **Block ping** (`playShieldBlockSfx`): 2200 Hz + 3300 Hz sine pair, ~220 ms. Played from `RaceScene.spawnShieldFlash` so all three blocked-hit paths (missile, seeker, oil) share it. Pairs with the cyan ring visual.
+- Voice peaks chosen so impacts (0.6) sit above launches (~0.4–0.5) and blocks (0.5), keeping the mix ducked under the engine voice peak (0.32 *positional*, 0.35 master).
+
+### Wall-hit thump (synthetic)
+- `playWallThumpSfx(bus, x, y, intensity)` in `src/audio/ItemSfx.ts`. Sub sine (90→50 Hz at low intensity, 60→35 Hz at high intensity) + lowpassed noise body (1400→220 Hz). ~240 ms total. Same fire-and-forget node graph as the other one-shots.
+- Caller passes `intensity ∈ [0, 1]`. Peak gain = `(0.32 + 0.32 × intensity) × posGain`, so glancing taps stay quiet and full crashes hit hard. Intensity also lowers the sub's start/end frequencies, giving heavy hits more low-end weight.
+- Triggered in `RaceScene.applyTrackBounds` next to the spark burst, gated by the same `vn > 60` threshold so wall-hugging contact stays silent. Intensity = `min(1, (vn − 60) / 300)` — vn 60 → 0, vn 360+ → 1. Same threshold + emit point as sparks, so the visual flash and audio thump are co-located in time and space.
+
 ## Open Questions
 - Top-down racing has no front/rear distinction; should we add stereo panning from the listener-relative angle? Cheap to add (`StereoPannerNode` per source) and would help locate cars on either side. Not in scope for this pass.
 - Engine timbre is the same sample for every car — all cars sound identical. Could pick from `loop_0..loop_5` per car for a bit of variety, or jitter `idleRate` slightly at race start.
@@ -55,6 +74,6 @@ Listener-relative positional audio. Player car is the listener; every sound sour
 - Skid intensity gating (speed≥40, lateralSpeed≥30, range 50) is eyeballed. Tune after a few laps on each track — Oval's continuous bend may want a higher floor so steady-state cornering doesn't whisper-skid.
 
 ## Next Up
-- Wall-hit thump (one-shot positional). Search continuing for a CC0 sample.
-- Item one-shots: missile launch, oil drop, shield block. Same trigger-time positional-gain pattern as the pickup chime.
 - Optional: stereo panning per source for left/right localisation.
+- Tune item-SFX peak gains and decay times once the user has played a few rounds — current values are eyeballed; the explosion in particular may be too loud relative to the engine voice when many AI cars fight at once.
+- Wall-thump intensity curve eyeballed (vn 60→0, vn 360→1). Re-tune after live driving — heavy crashes may want even more low-end weight, or the threshold may want to lift if light wall-scrub still triggers.

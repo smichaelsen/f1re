@@ -80,6 +80,15 @@ export default {
         polygon: stadiumGravelPatch(),
       },
     ],
+    // Two DRS zones on the long straights. Top straight (0..5) is the start straight; the start
+    // grid sits at idx 4 between the start gate (0) and end gate (5), but the engine's edge
+    // detection only fires on band-enter so the in-zone-at-T=0 cars never spuriously trigger.
+    drs: {
+      zones: [
+        { detectionIndex: 74, startIndex: 0, endIndex: 5 },
+        { detectionIndex: 34, startIndex: 40, endIndex: 45 },
+      ],
+    },
     centerline: stadiumCenterline(),
   },
 };

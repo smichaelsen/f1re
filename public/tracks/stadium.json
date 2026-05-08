@@ -142,6 +142,20 @@
       ]
     }
   ],
+  "drs": {
+    "zones": [
+      {
+        "detectionIndex": 74,
+        "startIndex": 0,
+        "endIndex": 5
+      },
+      {
+        "detectionIndex": 34,
+        "startIndex": 40,
+        "endIndex": 45
+      }
+    ]
+  },
   "centerline": [
     {
       "x": -600,

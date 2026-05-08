@@ -24,7 +24,11 @@ export class Hud {
   timeText: Phaser.GameObjects.Text;
   bestText: Phaser.GameObjects.Text;
   itemText: Phaser.GameObjects.Text;
+  drsText: Phaser.GameObjects.Text;
   msgText: Phaser.GameObjects.Text;
+  // Session-wide broadcast slot (FASTEST LAP, DRS ENABLED). Lives only on the 'left' HUD so it
+  // renders once at screen center even in 2P mode, instead of being mirrored on both sides.
+  broadcastText: Phaser.GameObjects.Text | null = null;
   posTitle: Phaser.GameObjects.Text | null = null;
   posRows: Phaser.GameObjects.Text[] = [];
   countdownText: Phaser.GameObjects.Text | null = null;
@@ -33,8 +37,9 @@ export class Hud {
   objects: Phaser.GameObjects.GameObject[] = [];
   resultsCompact = false;
   msgFadeUntil = 0;
+  broadcastFadeUntil = 0;
 
-  constructor(scene: Phaser.Scene, side: HudSide = "left") {
+  constructor(scene: Phaser.Scene, side: HudSide = "left", positionRowCount = 4) {
     this.scene = scene;
     this.side = side;
     const isLeft = side === "left";
@@ -58,6 +63,11 @@ export class Hud {
       .setOrigin(anchorX, 0)
       .setScrollFactor(0)
       .setDepth(1000);
+    this.drsText = scene.add
+      .text(startX, 170, "", { ...style, color: "#88ccff" })
+      .setOrigin(anchorX, 0)
+      .setScrollFactor(0)
+      .setDepth(1000);
 
     this.msgText = scene.add
       .text(0, 0, "", { ...style, fontSize: "36px", color: "#ffd24a" })
@@ -71,6 +81,7 @@ export class Hud {
       this.timeText,
       this.bestText,
       this.itemText,
+      this.drsText,
       this.msgText,
     ];
 
@@ -80,7 +91,7 @@ export class Hud {
         .setOrigin(1, 0)
         .setScrollFactor(0)
         .setDepth(1000);
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < positionRowCount; i++) {
         const row = scene.add
           .text(0, 44 + i * 26, "", style)
           .setOrigin(1, 0)
@@ -99,6 +110,11 @@ export class Hud {
         .setScrollFactor(0)
         .setDepth(1100)
         .setVisible(false);
+      this.broadcastText = scene.add
+        .text(0, 0, "", { ...style, fontSize: "32px", color: "#ffd24a" })
+        .setOrigin(0.5)
+        .setScrollFactor(0)
+        .setDepth(1000);
       this.resultsBg = scene.add
         .rectangle(0, 0, 100, 100, 0x000000, 0.7)
         .setOrigin(0.5)
@@ -117,7 +133,7 @@ export class Hud {
         .setDepth(1201)
         .setVisible(false);
 
-      this.objects.push(this.posTitle, ...this.posRows, this.countdownText, this.resultsBg, this.resultsText);
+      this.objects.push(this.posTitle, ...this.posRows, this.countdownText, this.broadcastText, this.resultsBg, this.resultsText);
     }
   }
 
@@ -136,9 +152,27 @@ export class Hud {
   setItem(item: string | null, useKey: string = "SPACE") {
     this.itemText.setText(item ? `ITEM [${item.toUpperCase()}]  ${useKey} to use` : "");
   }
+  setDrs(state: "off" | "available" | "active", drsKey: string = "RSHIFT") {
+    if (state === "off") {
+      this.drsText.setText("");
+      return;
+    }
+    if (state === "active") {
+      this.drsText.setText("DRS ACTIVE").setColor("#88ffff");
+      return;
+    }
+    this.drsText.setText(`DRS  ${drsKey} to deploy`).setColor("#88ccff");
+  }
   flash(text: string, ms = 1500) {
     this.msgText.setText(text);
     this.msgFadeUntil = this.scene.time.now + ms;
+  }
+  // Session-wide broadcast (e.g. fastest lap). No-op on the right HUD; only the left HUD owns
+  // the centered broadcast slot so 2P mode shows it once instead of mirrored.
+  broadcast(text: string, ms = 1500) {
+    if (!this.broadcastText) return;
+    this.broadcastText.setText(text);
+    this.broadcastFadeUntil = this.scene.time.now + ms;
   }
 
   setPositions(rows: PositionRow[], totalLaps: number) {
@@ -193,6 +227,7 @@ export class Hud {
       this.timeText.setPosition(20, 80);
       this.bestText.setPosition(20, 110);
       this.itemText.setPosition(20, 140);
+      this.drsText.setPosition(20, 170);
     } else {
       const x = cam.width - 20;
       this.speedText.setPosition(x, 20);
@@ -200,6 +235,7 @@ export class Hud {
       this.timeText.setPosition(x, 80);
       this.bestText.setPosition(x, 110);
       this.itemText.setPosition(x, 140);
+      this.drsText.setPosition(x, 170);
     }
 
     // Per-side flash position: P1 just left of center, P2 just right of center.
@@ -213,6 +249,12 @@ export class Hud {
 
     if (this.countdownText) {
       this.countdownText.setPosition(cam.width / 2, cam.height / 2);
+    }
+
+    if (this.broadcastText) {
+      // Sit slightly above the per-player flash slot (y=100) so a personal flash and a
+      // simultaneous broadcast (e.g. PERSONAL BEST + FASTEST LAP on the same lap) don't overlap.
+      this.broadcastText.setPosition(cam.width / 2, 56);
     }
 
     if (this.posTitle && this.posRows.length > 0) {
@@ -262,6 +304,9 @@ export class Hud {
       }
     }
     if (this.scene.time.now > this.msgFadeUntil) this.msgText.setText("");
+    if (this.broadcastText && this.scene.time.now > this.broadcastFadeUntil) {
+      this.broadcastText.setText("");
+    }
   }
 }
 

@@ -48,6 +48,23 @@ export interface RacingLineOverrides {
 }
 
 /**
+ * One DRS zone with its own detection point. The detection point is where gaps to the car
+ * ahead are evaluated; if a chasing car is within DRS_GAP_MS of the previous crosser, it
+ * gets DRS for this zone. `startIndex` and `endIndex` bound the activation window along
+ * the centerline. All three are centerline indices; `detectionIndex` must come strictly
+ * before `startIndex`, which must come strictly before `endIndex` along the loop direction.
+ */
+export interface DrsZone {
+  detectionIndex: number;
+  startIndex: number;
+  endIndex: number;
+}
+
+export interface DrsConfig {
+  zones: DrsZone[];
+}
+
+/**
  * Reference image displayed under the centerline in the track inspector,
  * for iterating geometry against a real-world track map. Inspector-only;
  * never read by RaceScene.
@@ -77,6 +94,7 @@ export interface TrackData {
   patches: SurfacePatch[];
   racingLineOverrides?: RacingLineOverrides;
   referenceOverlay?: ReferenceOverlay;
+  drs?: DrsConfig;
 }
 
 export class TrackDataError extends Error {}
@@ -113,6 +131,7 @@ export function parseTrackData(raw: unknown): TrackData {
   const racingLineOverrides = parseRacingLineOverrides(d.racingLineOverrides);
   const referenceOverlay = parseReferenceOverlay(d.referenceOverlay);
   const controlPoints = parseControlPoints(d.controlPoints);
+  const drs = parseDrs(d.drs, centerline.length);
 
   return {
     version,
@@ -127,7 +146,49 @@ export function parseTrackData(raw: unknown): TrackData {
     patches,
     racingLineOverrides,
     referenceOverlay,
+    drs,
   };
+}
+
+function parseDrs(raw: unknown, n: number): DrsConfig | undefined {
+  if (raw == null) return undefined;
+  if (typeof raw !== "object") throw new TrackDataError("drs must be an object");
+  const r = raw as Record<string, unknown>;
+  if (!Array.isArray(r.zones)) throw new TrackDataError("drs.zones must be an array");
+  const zones: DrsZone[] = r.zones.map((z, i) => parseDrsZone(z, i, n));
+  return { zones };
+}
+
+function parseDrsZone(raw: unknown, i: number, n: number): DrsZone {
+  if (!raw || typeof raw !== "object")
+    throw new TrackDataError(`drs.zones[${i}] must be an object`);
+  const z = raw as Record<string, unknown>;
+  const det = readIndex(z.detectionIndex, `drs.zones[${i}].detectionIndex`, n);
+  const start = readIndex(z.startIndex, `drs.zones[${i}].startIndex`, n);
+  const end = readIndex(z.endIndex, `drs.zones[${i}].endIndex`, n);
+  // Validate ordering: walking the loop forward, detection → start → end with no overlap of the
+  // start→end span past the next detection. We allow wrap-around, so the comparison uses arc
+  // distance from `det` rather than raw integer ordering.
+  const arcDetToStart = (start - det + n) % n;
+  const arcDetToEnd = (end - det + n) % n;
+  if (arcDetToStart === 0 || arcDetToEnd === 0)
+    throw new TrackDataError(
+      `drs.zones[${i}]: detectionIndex must differ from startIndex and endIndex`,
+    );
+  if (arcDetToEnd <= arcDetToStart)
+    throw new TrackDataError(
+      `drs.zones[${i}]: endIndex must come after startIndex along the loop direction (after detectionIndex)`,
+    );
+  return { detectionIndex: det, startIndex: start, endIndex: end };
+}
+
+function readIndex(raw: unknown, label: string, n: number): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw))
+    throw new TrackDataError(`${label} must be a finite number`);
+  const idx = Math.floor(raw);
+  if (idx < 0 || idx >= n)
+    throw new TrackDataError(`${label} (${idx}) out of range [0, ${n - 1}]`);
+  return idx;
 }
 
 function parseControlPoints(raw: unknown): ControlPoint[] | undefined {

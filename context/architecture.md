@@ -32,7 +32,12 @@
 ## Storage Model
 
 - **In-memory only at runtime for gameplay.** Race, car, lap, and scene state never persist between sessions.
-- **Inspector UI preferences are persisted.** `localStorage["f1re.inspect.toggles"]` stores the five inspector overlay toggles (points / checkpoints / racing line / reference / control points). This is the only `localStorage` key in the project; gameplay state stays in memory.
+- **UI / preference state is persisted to `localStorage`.** Gameplay state stays in memory; only menu and inspector choices survive a reload. Current keys:
+  - `f1re.inspect.toggles` — five inspector overlay toggles (points / checkpoints / racing line / reference / control points). Owned by `InspectScene`.
+  - `f1re.menu.prefs` — main menu + settings selections (track, difficulty, P1/P2 team, laps, opponents, players). Owned by `src/scenes/MenuPrefs.ts`. Each loader validates fields against the current enums and falls back to defaults on schema mismatch, so renamed tracks / removed teams degrade gracefully.
+  - `f1re.input.assignments` — 2P input pairings (which keyboard / pad maps to P1 vs P2). Owned by `src/input/InputSource.ts`.
+  - `f1re.drs.mode` — per-player DRS activation mode (`auto` / `manual`). Owned by `src/input/DrsMode.ts`.
+- New persisted prefs follow the same pattern: a single typed key, a `loadX()` that validates and falls back to defaults on any parse error, a `saveX()` that swallows quota / privacy errors. No central preference store.
 - **Track JSON** in `public/tracks/`: source of truth for geometry, surfaces, runoff, patches. Loaded by Phaser's JSON cache, parsed by `parseTrackData`, instantiated as `Track`.
 - **Procedural textures** generated in `BootScene.preload` (cars, pickups). Live in Phaser's texture cache.
 - **One external audio asset.** `public/audio/engine.wav` — looping engine sample (CC0, `loop_0.wav` from OpenGameArt by domasx2). Loaded via Phaser's audio loader in `BootScene.preload`, decoded to an `AudioBuffer`, then shared across all `EngineSound` instances. `playbackRate` modulation does the per-car pitch work.
