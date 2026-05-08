@@ -1,4 +1,5 @@
 import Phaser from "phaser";
+import { parseLocation } from "../router";
 
 export class BootScene extends Phaser.Scene {
   constructor() {
@@ -15,7 +16,12 @@ export class BootScene extends Phaser.Scene {
   }
 
   create() {
-    this.scene.start("MenuScene");
+    const route = parseLocation();
+    if (route.kind === "inspect") {
+      this.scene.start("InspectScene", { trackKey: route.trackKey, camera: route.camera });
+    } else {
+      this.scene.start("MenuScene");
+    }
   }
 
   private makeCarTexture(key: string, color: number) {

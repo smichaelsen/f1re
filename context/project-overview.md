@@ -61,6 +61,12 @@ F1RE is a browser-based 2D top-down racing game built with Phaser 3. It blends r
 - Player triggers items with SPACE; AI uses items on random 1–5s delay
 - 4 items: **boost** (1.6× speed for 2s), **missile** (homing, locks on enemies in 220-unit radius), **oil slick** (drop behind, spins anyone who hits it), **shield** (consumes one incoming hit)
 
+### Touch Controls
+
+- On touch devices the race scene draws an on-screen pad: bottom-left ◀ ▶ steering, bottom-right vertical stack ★ (item) / ▼ (brake) / ▲ (throttle).
+- Multi-touch: each finger evaluated independently against pad zones; works alongside keyboard for hybrid devices.
+- Landscape-only: a CSS overlay replaces the canvas on touch + portrait or sub-700×360 viewports, prompting the user to rotate.
+
 ### UI / Tooling
 
 - MenuScene: title, car select, track select, START RACE, INSPECT TRACK
@@ -85,7 +91,6 @@ F1RE is a browser-based 2D top-down racing game built with Phaser 3. It blends r
 - Account system / persistence / online leaderboards
 - Sound effects / music
 - Particle effects / juice (skid marks, dust, sparks)
-- Mobile touch controls
 - Real F1 trademarks, names, liveries, logos (parody only)
 - Visual track editor with drag-to-edit (the inspector is a precursor)
 - Per-segment wall placement (Monaco-style walls right at edge of asphalt that vary along the track)

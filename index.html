@@ -21,10 +21,45 @@
         align-items: center;
         justify-content: center;
       }
+      #rotate-prompt {
+        position: fixed;
+        inset: 0;
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        padding: 24px;
+        text-align: center;
+        background: #111;
+        z-index: 10;
+      }
+      #rotate-prompt .title {
+        font-size: 56px;
+        font-weight: bold;
+        color: #e10600;
+        letter-spacing: 4px;
+      }
+      #rotate-prompt .msg {
+        font-size: 18px;
+        color: #cccccc;
+        max-width: 360px;
+        line-height: 1.4;
+      }
+      @media (pointer: coarse) and (orientation: portrait),
+             (pointer: coarse) and (max-width: 699px),
+             (pointer: coarse) and (max-height: 359px) {
+        #rotate-prompt { display: flex; }
+        #game { display: none !important; }
+      }
     </style>
   </head>
   <body>
     <div id="game"></div>
+    <div id="rotate-prompt">
+      <div class="title">F1RE</div>
+      <div class="msg">Please rotate your device to landscape.<br/>Minimum screen size: 700 &times; 360.</div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

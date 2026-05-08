@@ -3,6 +3,17 @@ export interface TrackPoint {
   y: number;
 }
 
+/**
+ * Optional inspector annotation. Tracks generated from explicit control points
+ * (e.g. Catmull-Rom-driven layouts) can emit them so the inspector can render
+ * markers + labels distinct from spline samples. Never read by RaceScene.
+ */
+export interface ControlPoint {
+  x: number;
+  y: number;
+  label?: string;
+}
+
 export type Surface = "asphalt" | "grass" | "gravel";
 
 export interface RunoffSide {
@@ -59,6 +70,7 @@ export interface TrackData {
   description?: string;
   width: number;
   centerline: TrackPoint[];
+  controlPoints?: ControlPoint[];
   checkpoints: number;
   startIndex: number;
   runoff: { outside: RunoffSide; inside: RunoffSide };
@@ -100,6 +112,7 @@ export function parseTrackData(raw: unknown): TrackData {
   const patches = parsePatches(d.patches);
   const racingLineOverrides = parseRacingLineOverrides(d.racingLineOverrides);
   const referenceOverlay = parseReferenceOverlay(d.referenceOverlay);
+  const controlPoints = parseControlPoints(d.controlPoints);
 
   return {
     version,
@@ -107,6 +120,7 @@ export function parseTrackData(raw: unknown): TrackData {
     description,
     width: d.width,
     centerline,
+    controlPoints,
     checkpoints,
     startIndex,
     runoff,
@@ -114,6 +128,20 @@ export function parseTrackData(raw: unknown): TrackData {
     racingLineOverrides,
     referenceOverlay,
   };
+}
+
+function parseControlPoints(raw: unknown): ControlPoint[] | undefined {
+  if (raw == null) return undefined;
+  if (!Array.isArray(raw)) throw new TrackDataError("controlPoints must be an array");
+  return raw.map((p, i) => {
+    if (!p || typeof p !== "object")
+      throw new TrackDataError(`controlPoints[${i}] must be an object`);
+    const pp = p as Record<string, unknown>;
+    if (typeof pp.x !== "number" || typeof pp.y !== "number")
+      throw new TrackDataError(`controlPoints[${i}] must have numeric x and y`);
+    const label = typeof pp.label === "string" ? pp.label : undefined;
+    return { x: pp.x, y: pp.y, label };
+  });
 }
 
 function parseReferenceOverlay(raw: unknown): ReferenceOverlay | undefined {

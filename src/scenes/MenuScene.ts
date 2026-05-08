@@ -1,4 +1,5 @@
 import Phaser from "phaser";
+import { writeInspect } from "../router";
 
 export type CarColor = "red" | "blue" | "yellow" | "green";
 export type TrackKey = "oval" | "stadium" | "temple-of-speed" | "champions-wall";
@@ -338,6 +339,7 @@ export class MenuScene extends Phaser.Scene {
   }
 
   private inspect() {
+    writeInspect(this.selectedTrack);
     this.scene.start("InspectScene", { trackKey: this.selectedTrack });
   }
 

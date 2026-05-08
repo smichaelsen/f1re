@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import {
   SURFACE_PARAMS,
+  type ControlPoint,
   type RacingLineOverrides,
   type RunoffSide,
   type Surface,
@@ -9,7 +10,7 @@ import {
   type TrackPoint,
 } from "./TrackData";
 
-export type { TrackPoint } from "./TrackData";
+export type { ControlPoint, TrackPoint } from "./TrackData";
 export type Side = "outside" | "inside";
 
 export interface CheckpointZone {
@@ -35,13 +36,14 @@ const WALL_COLOR = 0x111111;
 const TRACK_EDGE_LINE = 0xffffff;
 
 const RACING_LINE_ITERATIONS = 200;
-const RACING_LINE_MARGIN = 22;
+const RACING_LINE_MARGIN = 24;
 
 export class Track {
   scene: Phaser.Scene;
   name: string;
   description?: string;
   centerline: TrackPoint[];
+  controlPoints: ControlPoint[];
   width: number;
   graphics: Phaser.GameObjects.Graphics;
   checkpoints: CheckpointZone[] = [];
@@ -61,6 +63,7 @@ export class Track {
     this.name = data.name;
     this.description = data.description;
     this.centerline = data.centerline;
+    this.controlPoints = data.controlPoints ?? [];
     this.width = data.width;
     this.checkpointCount = data.checkpoints;
     this.runoff = data.runoff;

@@ -3,6 +3,7 @@ import { Car, DEFAULT_CAR, SHIELD_COLOR, type CarInput, type SurfaceFeel } from 
 import { Track } from "../entities/Track";
 import { parseTrackData, SURFACE_PARAMS } from "../entities/TrackData";
 import { Hud, formatRaceTime, type PositionRow } from "../ui/Hud";
+import { TouchControls } from "../ui/TouchControls";
 import { DIFFICULTIES, LAPS_MAX, LAPS_MIN, OPPONENTS_MAX, OPPONENTS_MIN } from "./MenuScene";
 import type { CarColor, Difficulty, TrackKey } from "./MenuScene";
 import { AudioBus } from "../audio/AudioBus";
@@ -71,6 +72,7 @@ export class RaceScene extends Phaser.Scene {
   cars: Car[] = [];
   track!: Track;
   hud!: Hud;
+  touch!: TouchControls;
   cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   spaceKey!: Phaser.Input.Keyboard.Key;
   restartKey!: Phaser.Input.Keyboard.Key;
@@ -144,12 +146,16 @@ export class RaceScene extends Phaser.Scene {
 
     const aiColors = ALL_COLORS.filter((c) => c !== this.carColor);
     const params = DIFFICULTIES[this.difficulty];
+    const colorCounts: Record<CarColor, number> = { red: 0, blue: 0, yellow: 0, green: 0 };
     for (let i = 0; i < this.opponentCount; i++) {
       const slot = this.startGridSlot(i + 1);
       const color = aiColors[i % aiColors.length];
+      colorCounts[color]++;
+      const baseName = COLOR_NAMES[color];
+      const aiName = colorCounts[color] === 1 ? baseName : `${baseName}${colorCounts[color]}`;
       const [pLow, pHigh] = params.perfRange;
       const [sLow, sHigh] = params.skillRange;
-      const aiCar = new Car(this, slot.x, slot.y, `car_${color}`, COLOR_NAMES[color], false, {
+      const aiCar = new Car(this, slot.x, slot.y, `car_${color}`, aiName, false, {
         ...DEFAULT_CAR,
         maxSpeed: DEFAULT_CAR.maxSpeed * Phaser.Math.FloatBetween(pLow, pHigh),
         accel: DEFAULT_CAR.accel * Phaser.Math.FloatBetween(pLow, pHigh),
@@ -172,12 +178,14 @@ export class RaceScene extends Phaser.Scene {
     this.cameras.main.setZoom(0.85);
 
     this.hud = new Hud(this);
+    this.touch = new TouchControls(this);
 
     this.uiCam = this.cameras.add(0, 0, this.scale.width, this.scale.height);
     this.uiCam.setName("ui");
-    const hudSet = new Set(this.hud.objects);
-    const worldObjects = this.children.list.filter((c) => !hudSet.has(c));
-    this.cameras.main.ignore(this.hud.objects);
+    const uiObjects = [...this.hud.objects, ...this.touch.objects];
+    const uiSet = new Set<Phaser.GameObjects.GameObject>(uiObjects);
+    const worldObjects = this.children.list.filter((c) => !uiSet.has(c));
+    this.cameras.main.ignore(uiObjects);
     this.uiCam.ignore(worldObjects);
     this.cursors = this.input.keyboard!.createCursorKeys();
     this.spaceKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
@@ -252,10 +260,13 @@ export class RaceScene extends Phaser.Scene {
       return;
     }
 
+    this.touch.update();
+
     if (this.state === "countdown") {
       this.runCountdown(now);
       for (const c of this.cars) c.update(dt, NO_INPUT);
-      this.player.audioThrottle = this.cursors.up?.isDown ? 1 : 0;
+      const throttleHeld = this.cursors.up?.isDown || this.touch.state.throttle;
+      this.player.audioThrottle = throttleHeld ? 1 : 0;
       for (const ai of this.ai) ai.audioThrottle = 0;
     } else {
       this.runRacing(dt, now);
@@ -361,12 +372,15 @@ export class RaceScene extends Phaser.Scene {
     this.cameras.main.setFollowOffset(-lookX, -lookY);
 
     const playerActive = this.player.finishedAtMs == null;
+    const t = this.touch.state;
     const playerInput: CarInput = playerActive
       ? {
-          throttle: this.cursors.up?.isDown ? 1 : 0,
-          brake: this.cursors.down?.isDown ? 1 : 0,
-          steer: (this.cursors.right?.isDown ? 1 : 0) - (this.cursors.left?.isDown ? 1 : 0),
-          useItem: Phaser.Input.Keyboard.JustDown(this.spaceKey),
+          throttle: this.cursors.up?.isDown || t.throttle ? 1 : 0,
+          brake: this.cursors.down?.isDown || t.brake ? 1 : 0,
+          steer:
+            (this.cursors.right?.isDown || t.right ? 1 : 0) -
+            (this.cursors.left?.isDown || t.left ? 1 : 0),
+          useItem: Phaser.Input.Keyboard.JustDown(this.spaceKey) || this.touch.consumeUseItem(),
         }
       : NO_INPUT;
     for (const c of this.cars) c.draft = this.computeDraft(c);
@@ -772,7 +786,7 @@ export class RaceScene extends Phaser.Scene {
     }
   }
 
-  private computePositions(): PositionRow[] {
+  private rankedCars(): Car[] {
     const ncp = this.track.checkpoints.length;
     const rows = this.cars.map((c) => {
       const crossedThisLap = (c.nextCheckpoint - 1 + ncp) % ncp;
@@ -790,25 +804,31 @@ export class RaceScene extends Phaser.Scene {
       if (b.progress !== a.progress) return b.progress - a.progress;
       return a.distToNext - b.distToNext;
     });
-    return rows.map((r, i) => ({
+    return rows.map((r) => r.car);
+  }
+
+  private computePositions(): PositionRow[] {
+    return this.rankedCars().map((car, i) => ({
       pos: i + 1,
-      name: r.car.name,
-      isPlayer: r.car.isPlayer,
-      lapsDone: r.car.lap,
-      finished: r.car.finishedAtMs != null,
+      name: car.name,
+      isPlayer: car.isPlayer,
+      lapsDone: car.lap,
+      finished: car.finishedAtMs != null,
     }));
   }
 
   private showResults() {
-    const positions = this.computePositions();
+    const sorted = this.rankedCars();
     const allDone = this.cars.every((c) => c.finishedAtMs != null);
     const playerActive = this.player.finishedAtMs == null;
     const compact = playerActive && !allDone;
 
     const lines: string[] = [];
     let prevCar: Car | null = null;
-    for (const p of positions) {
-      const car = this.cars.find((c) => c.name === p.name)!;
+    for (let i = 0; i < sorted.length; i++) {
+      const car = sorted[i];
+      const pos = i + 1;
+      const isPlayer = car.isPlayer;
 
       if (compact && car.finishedAtMs == null) break;
 
@@ -825,16 +845,16 @@ export class RaceScene extends Phaser.Scene {
         timeCol = `+${lapDiff} LAP${lapDiff === 1 ? "" : "S"}`;
       }
 
-      const tag = p.isPlayer ? " ◂ YOU" : "";
+      const tag = isPlayer ? " ◂ YOU" : "";
       const nameCol = car.name.padEnd(4);
 
       if (compact) {
         const timeColPadded = timeCol.padEnd(10);
-        lines.push(`P${p.pos} ${nameCol} ${timeColPadded}`);
+        lines.push(`P${pos} ${nameCol} ${timeColPadded}`);
       } else {
         const best = car.bestLapMs != null ? formatRaceTime(car.bestLapMs) : "—";
         const timeColPadded = timeCol.padEnd(11);
-        lines.push(`P${p.pos}  ${nameCol}  ${timeColPadded}  best ${best}${tag}`);
+        lines.push(`P${pos}  ${nameCol}  ${timeColPadded}  best ${best}${tag}`);
       }
 
       prevCar = car;

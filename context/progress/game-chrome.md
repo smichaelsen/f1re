@@ -21,6 +21,7 @@ Everything outside the track + physics + items: the framing, the HUD, the menus,
 - Results overlay: compact bottom-right while the player is still racing → flips to a full center "RACE OVER" once the player finishes.
 - Format: P1 absolute total time; P2..PN interval to the car ahead (`+s.cc` or `+m:ss.cc` for time, `+N LAP(S)` for lap-down).
 - Best lap per car shown in full mode. Monospace font for column alignment. Panel auto-sizes to text.
+- **AI name disambiguation.** When >3 opponents force a colour to repeat, the second/third instance gets a numeric suffix (`BLU`, `BLU2`, `BLU3`). Position panel and results both keyed off `Car` refs, not names — `RaceScene.rankedCars()` is the single source of truth for race order; `computePositions()` and `showResults()` both derive from it.
 
 ### Inspector
 - InspectScene: read-only track viewer.
@@ -29,6 +30,17 @@ Everything outside the track + physics + items: the framing, the HUD, the menus,
 - Shows centerline points (yellow) with index labels (every Nth), checkpoint markers (cyan) with CP labels and ★ on finish.
 - Track cycler ([ / ]), point/checkpoint visibility toggles (1 / 2), fit (0), ESC to menu.
 - Live cursor-coord readout (top-right).
+- **Path-segment URL routing.** `/inspect/<trackKey>` loads the scene + track directly; query string `?z=&x=&y=` carries zoom + view-center so reload restores the exact view. `src/router.ts` parses + writes via `history.pushState`/`replaceState`; URL syncs are debounced (250ms). Track cycle pushes a new entry; ESC pushes `/`; browser back/forward routes via a global `popstate` listener in `main.ts` that stops/starts scenes. `BootScene.create` reads the URL once on boot and starts the right scene. Phaser's loader gets `baseURL: import.meta.env.BASE_URL` so asset paths resolve absolutely under any URL depth.
+- **Control points overlay (key `5`).** When the track JSON includes a `controlPoints: [{x, y, label?}]` array, the inspector renders a magenta marker per point. Text is only drawn for points that supply an explicit `label` — index-only points stay clean. Today only Champions' Wall emits them (the spline is built from explicit Catmull-Rom controls); formula-driven tracks omit the field and the toggle is a no-op for them.
+- **Toggle persistence.** All five toggle states (1 points / 2 checkpoints / 3 racing line / 4 reference / 5 control points) are read from `localStorage[f1re.inspect.toggles]` in `init()` and written on every flip. Storage failures (private mode, quota) fall back to defaults silently.
+
+### Touch controls (race)
+- `src/ui/TouchControls.ts` mirrors the `Hud` pattern: scene-local view module, exposes `objects` so `RaceScene` wires the two-camera ignore lists in one place.
+- Activation: `isTouchDevice()` checks `'ontouchstart' in window`, `navigator.maxTouchPoints`, and `(pointer: coarse)`. When false, the module is dormant — no graphics added, no input registered.
+- Pads: bottom-left ◀ ▶ (steer), bottom-right vertical stack ★ item / ▼ brake / ▲ throttle. Semi-transparent dark fill, white stroke; alpha bumps when pressed.
+- Multi-touch: `RaceScene` calls `input.addPointer(3)` (5 total). Each frame `TouchControls.update()` walks `input.manager.pointers`, hit-tests each active pointer against every zone (circle test), and sets per-zone booleans. Item is edge-triggered (rising-edge consumed by `consumeUseItem()`).
+- Input combine: `runRacing` ORs keyboard + touch state per axis so hybrid devices work. ESC/R remain keyboard-only for now.
+- Landscape gate: pure CSS media query in `index.html` swaps `#game` for a `#rotate-prompt` overlay when `(pointer: coarse)` AND (orientation: portrait OR width<700 OR height<360).
 
 ### Camera polish (race)
 - World camera zoom dropped from 0.9 → 0.85 for a wider preview of the upcoming track.
@@ -38,7 +50,8 @@ Everything outside the track + physics + items: the framing, the HUD, the menus,
 - Runtime-spawned world graphics (`fireMissile`, `dropOil`) call `uiCam.ignore(g)` at creation so the UI camera stays HUD-only.
 
 ## Architecture Decisions
-- **Two-camera split is the pattern for any UI that must not scale with world zoom.** Applied to InspectScene and RaceScene. The `Hud` class owns its `objects` array so the scene can wire main/UI camera ignore lists in one place; runtime-spawned world graphics opt out of the UI cam at creation.
+- **Two-camera split is the pattern for any UI that must not scale with world zoom.** Applied to InspectScene and RaceScene. The `Hud` and `TouchControls` classes own an `objects` array so the scene can wire main/UI camera ignore lists in one place; runtime-spawned world graphics opt out of the UI cam at creation.
+- **Touch detection happens once per scene create.** `TouchControls.active` is set in the constructor from `isTouchDevice()` and never recomputed. A device that toggles input mode mid-race is unsupported (extremely rare; would just need a scene restart).
 - **Camera follow uses `setFollowOffset` for velocity look-ahead** rather than a custom follower. Phaser's lerp smooths the per-frame offset jumps, so a clamp on the offset is sufficient to prevent whip during spin.
 - **The `Hud` is purely a view of game state.** It never owns gameplay state, never decides race outcomes; it only reflects what the scene tells it.
 

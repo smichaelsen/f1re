@@ -18,7 +18,7 @@ export const DEFAULT_CAR: CarConfig = {
   accel: 280,
   brake: 520,
   reverseSpeed: 120,
-  turnRate: 3.2,
+  turnRate: 2.5,
   grip: 1.0,
   drag: 0.6,
   offTrackDrag: 3.5,

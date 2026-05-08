@@ -1,10 +1,55 @@
 import Phaser from "phaser";
 import { Track } from "../entities/Track";
 import { parseTrackData, type ReferenceOverlay } from "../entities/TrackData";
+import { type CameraState, writeInspect, writeMenu } from "../router";
 import { TRACK_KEYS, type TrackKey } from "./MenuScene";
+
+const TOGGLE_STORAGE_KEY = "f1re.inspect.toggles";
+
+interface InspectToggles {
+  showPoints: boolean;
+  showCheckpoints: boolean;
+  showRacingLine: boolean;
+  showReferenceOverlay: boolean;
+  showControlPoints: boolean;
+}
+
+const DEFAULT_TOGGLES: InspectToggles = {
+  showPoints: true,
+  showCheckpoints: true,
+  showRacingLine: true,
+  showReferenceOverlay: true,
+  showControlPoints: true,
+};
+
+function loadToggles(): InspectToggles {
+  try {
+    const raw = window.localStorage.getItem(TOGGLE_STORAGE_KEY);
+    if (!raw) return { ...DEFAULT_TOGGLES };
+    const parsed = JSON.parse(raw) as Partial<InspectToggles>;
+    return {
+      showPoints: typeof parsed.showPoints === "boolean" ? parsed.showPoints : DEFAULT_TOGGLES.showPoints,
+      showCheckpoints: typeof parsed.showCheckpoints === "boolean" ? parsed.showCheckpoints : DEFAULT_TOGGLES.showCheckpoints,
+      showRacingLine: typeof parsed.showRacingLine === "boolean" ? parsed.showRacingLine : DEFAULT_TOGGLES.showRacingLine,
+      showReferenceOverlay: typeof parsed.showReferenceOverlay === "boolean" ? parsed.showReferenceOverlay : DEFAULT_TOGGLES.showReferenceOverlay,
+      showControlPoints: typeof parsed.showControlPoints === "boolean" ? parsed.showControlPoints : DEFAULT_TOGGLES.showControlPoints,
+    };
+  } catch {
+    return { ...DEFAULT_TOGGLES };
+  }
+}
+
+function saveToggles(t: InspectToggles): void {
+  try {
+    window.localStorage.setItem(TOGGLE_STORAGE_KEY, JSON.stringify(t));
+  } catch {
+    // localStorage may be disabled (private mode, quota); ignore.
+  }
+}
 
 interface InspectInit {
   trackKey?: TrackKey;
+  camera?: CameraState;
 }
 
 const HUD_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
@@ -31,6 +76,15 @@ const CP_LABEL_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
   strokeThickness: 2,
 };
 
+const CTRL_LABEL_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
+  fontFamily: "system-ui, sans-serif",
+  fontSize: "13px",
+  fontStyle: "bold",
+  color: "#ff6ad5",
+  stroke: "#000000",
+  strokeThickness: 3,
+};
+
 export class InspectScene extends Phaser.Scene {
   trackKey: TrackKey = "oval";
   track!: Track;
@@ -51,13 +105,20 @@ export class InspectScene extends Phaser.Scene {
   worldObjects: Phaser.GameObjects.GameObject[] = [];
   uiObjects: Phaser.GameObjects.GameObject[] = [];
 
-  showPoints = true;
-  showCheckpoints = true;
-  showRacingLine = true;
-  showReferenceOverlay = true;
+  showPoints = DEFAULT_TOGGLES.showPoints;
+  showCheckpoints = DEFAULT_TOGGLES.showCheckpoints;
+  showRacingLine = DEFAULT_TOGGLES.showRacingLine;
+  showReferenceOverlay = DEFAULT_TOGGLES.showReferenceOverlay;
+  showControlPoints = DEFAULT_TOGGLES.showControlPoints;
 
   referenceOverlay: ReferenceOverlay | undefined;
   referenceOverlayImage: Phaser.GameObjects.Image | null = null;
+
+  initialCamera: CameraState | undefined;
+  private lastZoom = 0;
+  private lastScrollX = 0;
+  private lastScrollY = 0;
+  private urlSyncTimer: number | null = null;
 
   overUi = false;
   isDragging = false;
@@ -70,6 +131,7 @@ export class InspectScene extends Phaser.Scene {
     two: Phaser.Input.Keyboard.Key;
     three: Phaser.Input.Keyboard.Key;
     four: Phaser.Input.Keyboard.Key;
+    five: Phaser.Input.Keyboard.Key;
     zero: Phaser.Input.Keyboard.Key;
     prev: Phaser.Input.Keyboard.Key;
     next: Phaser.Input.Keyboard.Key;
@@ -81,6 +143,23 @@ export class InspectScene extends Phaser.Scene {
 
   init(data: InspectInit) {
     this.trackKey = data.trackKey ?? "oval";
+    this.initialCamera = data.camera;
+    const t = loadToggles();
+    this.showPoints = t.showPoints;
+    this.showCheckpoints = t.showCheckpoints;
+    this.showRacingLine = t.showRacingLine;
+    this.showReferenceOverlay = t.showReferenceOverlay;
+    this.showControlPoints = t.showControlPoints;
+  }
+
+  private persistToggles() {
+    saveToggles({
+      showPoints: this.showPoints,
+      showCheckpoints: this.showCheckpoints,
+      showRacingLine: this.showRacingLine,
+      showReferenceOverlay: this.showReferenceOverlay,
+      showControlPoints: this.showControlPoints,
+    });
   }
 
   preload() {
@@ -132,7 +211,7 @@ export class InspectScene extends Phaser.Scene {
       this.add.text(
         20,
         this.scale.height - 30,
-        "drag pan · wheel/buttons zoom · 0 fit · 1 points · 2 checkpoints · 3 racing line · 4 reference · [ ] track · ESC menu",
+        "drag pan · wheel/buttons zoom · 0 fit · 1 points · 2 checkpoints · 3 racing line · 4 reference · 5 control pts · [ ] track · ESC menu",
         { ...HUD_STYLE, fontSize: "13px", color: "#aaaaaa" },
       ),
     );
@@ -159,6 +238,7 @@ export class InspectScene extends Phaser.Scene {
       two: kb.addKey(Phaser.Input.Keyboard.KeyCodes.TWO),
       three: kb.addKey(Phaser.Input.Keyboard.KeyCodes.THREE),
       four: kb.addKey(Phaser.Input.Keyboard.KeyCodes.FOUR),
+      five: kb.addKey(Phaser.Input.Keyboard.KeyCodes.FIVE),
       zero: kb.addKey(Phaser.Input.Keyboard.KeyCodes.ZERO),
       prev: kb.addKey(Phaser.Input.Keyboard.KeyCodes.OPEN_BRACKET),
       next: kb.addKey(Phaser.Input.Keyboard.KeyCodes.CLOSED_BRACKET),
@@ -204,28 +284,52 @@ export class InspectScene extends Phaser.Scene {
     );
 
     this.fitView();
+    if (this.initialCamera) {
+      cam.setZoom(this.initialCamera.z);
+      cam.centerOn(this.initialCamera.x, this.initialCamera.y);
+    }
+    this.lastZoom = cam.zoom;
+    this.lastScrollX = cam.scrollX;
+    this.lastScrollY = cam.scrollY;
+
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      if (this.urlSyncTimer !== null) {
+        window.clearTimeout(this.urlSyncTimer);
+        this.urlSyncTimer = null;
+      }
+    });
   }
 
   update() {
     if (Phaser.Input.Keyboard.JustDown(this.keys.esc)) {
+      writeMenu();
       this.scene.start("MenuScene");
       return;
     }
     if (Phaser.Input.Keyboard.JustDown(this.keys.one)) {
       this.showPoints = !this.showPoints;
       this.drawOverlay();
+      this.persistToggles();
     }
     if (Phaser.Input.Keyboard.JustDown(this.keys.two)) {
       this.showCheckpoints = !this.showCheckpoints;
       this.drawOverlay();
+      this.persistToggles();
     }
     if (Phaser.Input.Keyboard.JustDown(this.keys.three)) {
       this.showRacingLine = !this.showRacingLine;
       this.drawOverlay();
+      this.persistToggles();
     }
     if (Phaser.Input.Keyboard.JustDown(this.keys.four)) {
       this.showReferenceOverlay = !this.showReferenceOverlay;
       this.referenceOverlayImage?.setVisible(this.showReferenceOverlay);
+      this.persistToggles();
+    }
+    if (Phaser.Input.Keyboard.JustDown(this.keys.five)) {
+      this.showControlPoints = !this.showControlPoints;
+      this.drawOverlay();
+      this.persistToggles();
     }
     if (Phaser.Input.Keyboard.JustDown(this.keys.zero)) {
       this.fitView();
@@ -236,6 +340,24 @@ export class InspectScene extends Phaser.Scene {
     if (Phaser.Input.Keyboard.JustDown(this.keys.next)) {
       this.cycleTrack(+1);
     }
+
+    const cam = this.cameras.main;
+    if (cam.zoom !== this.lastZoom || cam.scrollX !== this.lastScrollX || cam.scrollY !== this.lastScrollY) {
+      this.lastZoom = cam.zoom;
+      this.lastScrollX = cam.scrollX;
+      this.lastScrollY = cam.scrollY;
+      this.scheduleUrlSync();
+    }
+  }
+
+  private scheduleUrlSync() {
+    if (this.urlSyncTimer !== null) window.clearTimeout(this.urlSyncTimer);
+    this.urlSyncTimer = window.setTimeout(() => {
+      this.urlSyncTimer = null;
+      const cam = this.cameras.main;
+      const center = cam.midPoint;
+      writeInspect(this.trackKey, { z: cam.zoom, x: center.x, y: center.y }, true);
+    }, 250);
   }
 
   private loadReferenceOverlay() {
@@ -319,6 +441,7 @@ export class InspectScene extends Phaser.Scene {
   private cycleTrack(dir: number) {
     const idx = TRACK_KEYS.indexOf(this.trackKey);
     const next = TRACK_KEYS[(idx + dir + TRACK_KEYS.length) % TRACK_KEYS.length];
+    writeInspect(next);
     this.scene.restart({ trackKey: next });
   }
 
@@ -363,6 +486,23 @@ export class InspectScene extends Phaser.Scene {
         this.overlay.fillCircle(p.x, p.y, 3);
         if (i % labelStride === 0) {
           const txt = this.add.text(p.x + 6, p.y - 5, String(i), LABEL_STYLE).setDepth(101);
+          this.labels.push(txt);
+          this.worldObjects.push(txt);
+        }
+      }
+    }
+
+    if (this.showControlPoints && this.track.controlPoints.length > 0) {
+      this.overlay.lineStyle(2, 0xff6ad5, 1);
+      this.overlay.fillStyle(0xff6ad5, 1);
+      for (const p of this.track.controlPoints) {
+        this.overlay.strokeCircle(p.x, p.y, 8);
+        this.overlay.fillCircle(p.x, p.y, 3);
+        if (p.label) {
+          const txt = this.add
+            .text(p.x, p.y - 12, p.label, CTRL_LABEL_STYLE)
+            .setOrigin(0.5, 1)
+            .setDepth(102);
           this.labels.push(txt);
           this.worldObjects.push(txt);
         }

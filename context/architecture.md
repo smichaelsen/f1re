@@ -31,7 +31,8 @@
 
 ## Storage Model
 
-- **In-memory only at runtime.** No persistence between sessions, no localStorage.
+- **In-memory only at runtime for gameplay.** Race, car, lap, and scene state never persist between sessions.
+- **Inspector UI preferences are persisted.** `localStorage["f1re.inspect.toggles"]` stores the five inspector overlay toggles (points / checkpoints / racing line / reference / control points). This is the only `localStorage` key in the project; gameplay state stays in memory.
 - **Track JSON** in `public/tracks/`: source of truth for geometry, surfaces, runoff, patches. Loaded by Phaser's JSON cache, parsed by `parseTrackData`, instantiated as `Track`.
 - **Procedural textures** generated in `BootScene.preload` (cars, pickups). Live in Phaser's texture cache.
 - **One external audio asset.** `public/audio/engine.wav` — looping engine sample (CC0, `loop_0.wav` from OpenGameArt by domasx2). Loaded via Phaser's audio loader in `BootScene.preload`, decoded to an `AudioBuffer`, then shared across all `EngineSound` instances. `playbackRate` modulation does the per-car pitch work.
