@@ -12,7 +12,9 @@ Everything outside the track + physics + items: the framing, the HUD, the menus,
 
 ### Cars sprite
 - F1-style open-wheel sprite (44×20): rounded chassis, 4 corner wheels with silver hubs, sidepods, cockpit + helmet, front + rear wings.
-- 4 colour variants generated procedurally.
+- **Two-tone livery + design variant.** Each car has a `{ primary, secondary, variant }` livery. Variants: `nose` (secondary fills the nose cone), `sidepods` (top + bottom edge stripes on the chassis), `spine` (centerline stripe nose → engine cover), `wingtips` (secondary on the front + rear wing stripes).
+- Textures generated lazily in `src/entities/CarSprite.ts`: `ensureCarTexture(scene, livery)` builds key `car_<primary>_<secondary>_<variant>` on first use and caches it. BootScene no longer pre-bakes per-color textures.
+- AI cars get a fully random livery; player keeps the primary they chose in the menu but secondary + variant randomize at race start. Names still derive from the primary colour (with disambig `BLU`/`BLU2`/`BLU3`).
 
 ### Race flow + results
 - **Grid lineup.** All cars (player included) start at staggered grid slots **before** the start/finish line. `RaceScene.startGridSlot(index)` walks `40 + index * 40` units back along the centerline from `startIndex` and offsets ±30 laterally on alternating sides. Player gets slot 0 (pole), AIs fill slots `1..opponentCount`. Geometry comes from `gridSlotBehindStart` so the lineup stays on-track even where the start straight curves.

@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import { Car, DEFAULT_CAR, SHIELD_COLOR, type CarInput, type SurfaceFeel } from "../entities/Car";
+import { ensureCarTexture, randomLivery } from "../entities/CarSprite";
 import { Track } from "../entities/Track";
 import { parseTrackData, SURFACE_PARAMS } from "../entities/TrackData";
 import { Hud, formatRaceTime, type PositionRow } from "../ui/Hud";
@@ -17,7 +18,6 @@ interface RaceInit {
   opponents?: number;
 }
 
-const ALL_COLORS: CarColor[] = ["red", "blue", "yellow", "green"];
 const COLOR_NAMES: Record<CarColor, string> = {
   red: "RED",
   blue: "BLU",
@@ -134,28 +134,29 @@ export class RaceScene extends Phaser.Scene {
     this.track = Track.fromData(this, parseTrackData(raw));
 
     const playerSlot = this.startGridSlot(0);
+    const playerLivery = randomLivery(Math.random, this.carColor);
     this.player = new Car(
       this,
       playerSlot.x,
       playerSlot.y,
-      `car_${this.carColor}`,
+      ensureCarTexture(this, playerLivery),
       "YOU",
       true,
     );
     this.player.heading = playerSlot.heading;
 
-    const aiColors = ALL_COLORS.filter((c) => c !== this.carColor);
     const params = DIFFICULTIES[this.difficulty];
     const colorCounts: Record<CarColor, number> = { red: 0, blue: 0, yellow: 0, green: 0 };
     for (let i = 0; i < this.opponentCount; i++) {
       const slot = this.startGridSlot(i + 1);
-      const color = aiColors[i % aiColors.length];
+      const livery = randomLivery(Math.random);
+      const color = livery.primary;
       colorCounts[color]++;
       const baseName = COLOR_NAMES[color];
       const aiName = colorCounts[color] === 1 ? baseName : `${baseName}${colorCounts[color]}`;
       const [pLow, pHigh] = params.perfRange;
       const [sLow, sHigh] = params.skillRange;
-      const aiCar = new Car(this, slot.x, slot.y, `car_${color}`, aiName, false, {
+      const aiCar = new Car(this, slot.x, slot.y, ensureCarTexture(this, livery), aiName, false, {
         ...DEFAULT_CAR,
         maxSpeed: DEFAULT_CAR.maxSpeed * Phaser.Math.FloatBetween(pLow, pHigh),
         accel: DEFAULT_CAR.accel * Phaser.Math.FloatBetween(pLow, pHigh),
