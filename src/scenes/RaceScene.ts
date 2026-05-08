@@ -1,13 +1,13 @@
 import Phaser from "phaser";
 import { Car, DEFAULT_CAR, SHIELD_COLOR, type CarInput, type SurfaceFeel } from "../entities/Car";
 import { ensureCarTexture, randomVariant } from "../entities/CarSprite";
-import { DEFAULT_TEAM_ID, TEAMS, teamById, type TeamId } from "../entities/Team";
+import { DEFAULT_TEAM_ID, TEAMS, teamById, type Team, type TeamId } from "../entities/Team";
 import { Track } from "../entities/Track";
 import { parseTrackData, SURFACE_PARAMS } from "../entities/TrackData";
 import { Hud, formatRaceTime, type PositionRow } from "../ui/Hud";
 import { TouchControls } from "../ui/TouchControls";
-import { DIFFICULTIES, LAPS_MAX, LAPS_MIN, OPPONENTS_MAX, OPPONENTS_MIN } from "./MenuScene";
-import type { Difficulty, TrackKey } from "./MenuScene";
+import { DIFFICULTIES, LAPS_MAX, LAPS_MIN, OPPONENTS_MAX, OPPONENTS_MIN, PLAYERS_MAX, PLAYERS_MIN } from "./MenuScene";
+import type { Difficulty, PlayerCount, TrackKey } from "./MenuScene";
 import { AudioBus } from "../audio/AudioBus";
 import { EngineSound } from "../audio/EngineSound";
 import { SkidSound } from "../audio/SkidSound";
@@ -17,6 +17,9 @@ import { SkidMarks } from "../entities/SkidMarks";
 interface RaceInit {
   trackKey?: TrackKey;
   teamId?: TeamId;
+  // P2's team in 2-player mode. Ignored when players === 1.
+  teamId2?: TeamId;
+  players?: PlayerCount;
   difficulty?: Difficulty;
   laps?: number;
   opponents?: number;
@@ -47,7 +50,9 @@ interface Missile {
   y: number;
   vx: number;
   vy: number;
-  ownerIsPlayer: boolean;
+  // The car that fired this missile. Anyone *else* — humans or AI — is a valid target,
+  // including the other human in 2P mode (player-on-player is intentional).
+  owner: Car;
   expiresAt: number;
 }
 
@@ -64,14 +69,26 @@ const AIM_OFFSET_RANGE = 0.5;
 const NO_INPUT: CarInput = { throttle: 0, brake: 0, steer: 0, useItem: false };
 
 export class RaceScene extends Phaser.Scene {
+  // humans[0] is always the primary player (P1). humans.length === 2 in 2P mode.
+  // `player` is kept as an alias for humans[0] so the bulk of single-player code paths stay short.
+  humans: Car[] = [];
   player!: Car;
   ai: Car[] = [];
   cars: Car[] = [];
   track!: Track;
+  // hud is the left-side HUD (always present). hud2 only exists in 2P mode (right-side mirror).
   hud!: Hud;
+  hud2: Hud | null = null;
   touch!: TouchControls;
   cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   spaceKey!: Phaser.Input.Keyboard.Key;
+  // 2P-only: WASD + Enter for the second control scheme. Bound regardless of mode but only
+  // read by `runRacing` when humans.length === 2.
+  wKey!: Phaser.Input.Keyboard.Key;
+  aKey!: Phaser.Input.Keyboard.Key;
+  sKey!: Phaser.Input.Keyboard.Key;
+  dKey!: Phaser.Input.Keyboard.Key;
+  enterKey!: Phaser.Input.Keyboard.Key;
   restartKey!: Phaser.Input.Keyboard.Key;
 
   pickups: Pickup[] = [];
@@ -91,6 +108,8 @@ export class RaceScene extends Phaser.Scene {
 
   trackKey: TrackKey = "oval";
   teamId: TeamId = DEFAULT_TEAM_ID;
+  teamId2: TeamId = DEFAULT_TEAM_ID;
+  playerCount: PlayerCount = 1;
   difficulty: Difficulty = "normal";
   totalLaps: number = 3;
   opponentCount: number = 3;
@@ -104,6 +123,8 @@ export class RaceScene extends Phaser.Scene {
   init(data: RaceInit) {
     this.trackKey = data.trackKey ?? "oval";
     this.teamId = data.teamId ?? DEFAULT_TEAM_ID;
+    this.teamId2 = data.teamId2 ?? DEFAULT_TEAM_ID;
+    this.playerCount = Phaser.Math.Clamp(data.players ?? 1, PLAYERS_MIN, PLAYERS_MAX) as PlayerCount;
     this.difficulty = data.difficulty ?? "normal";
     this.totalLaps = Phaser.Math.Clamp(data.laps ?? 3, LAPS_MIN, LAPS_MAX);
     this.opponentCount = Phaser.Math.Clamp(data.opponents ?? 3, OPPONENTS_MIN, OPPONENTS_MAX);
@@ -117,6 +138,7 @@ export class RaceScene extends Phaser.Scene {
   }
 
   create() {
+    this.humans = [];
     this.ai = [];
     this.cars = [];
     this.pickups = [];
@@ -127,6 +149,7 @@ export class RaceScene extends Phaser.Scene {
     this.skids.clear();
     this.audioBus = null;
     this.skidMarks = null;
+    this.hud2 = null;
     this.state = "countdown";
     this.raceStartedAt = 0;
     this.raceEndedAt = 0;
@@ -136,26 +159,29 @@ export class RaceScene extends Phaser.Scene {
 
     this.skidMarks = this.createSkidMarks();
 
-    const playerSlot = this.startGridSlot(0);
-    const playerTeam = teamById(this.teamId);
-    const playerLivery = {
-      primary: playerTeam.primary,
-      secondary: playerTeam.secondary,
-      variant: randomVariant(Math.random),
-    };
-    this.player = new Car(
-      this,
-      playerSlot.x,
-      playerSlot.y,
-      ensureCarTexture(this, playerLivery),
-      "YOU",
-      true,
-    );
-    this.player.heading = playerSlot.heading;
+    // Spawn humans into grid slots 0..N-1. Each gets playerIndex 0/1 so per-player HUDs and
+    // per-player flashes can later route by index. Slot 0 is pole, slot 1 is the row behind.
+    const humanTeams: Team[] = [teamById(this.teamId)];
+    if (this.playerCount === 2) humanTeams.push(teamById(this.teamId2));
+    for (let i = 0; i < humanTeams.length; i++) {
+      const slot = this.startGridSlot(i);
+      const team = humanTeams[i];
+      const livery = {
+        primary: team.primary,
+        secondary: team.secondary,
+        variant: randomVariant(Math.random),
+      };
+      const name = this.playerCount === 1 ? "YOU" : `P${i + 1}`;
+      const car = new Car(this, slot.x, slot.y, ensureCarTexture(this, livery), name, true);
+      car.heading = slot.heading;
+      car.playerIndex = i;
+      this.humans.push(car);
+    }
+    this.player = this.humans[0];
 
     const params = DIFFICULTIES[this.difficulty];
     const teamCounts = new Map<string, number>();
-    teamCounts.set(playerTeam.id, 1);
+    for (const t of humanTeams) teamCounts.set(t.id, (teamCounts.get(t.id) ?? 0) + 1);
     const aiTeamPool: typeof TEAMS[number][] = [];
     for (const t of TEAMS) {
       const slots = 2 - (teamCounts.get(t.id) ?? 0);
@@ -166,7 +192,9 @@ export class RaceScene extends Phaser.Scene {
       [aiTeamPool[i], aiTeamPool[j]] = [aiTeamPool[j], aiTeamPool[i]];
     }
     for (let i = 0; i < this.opponentCount; i++) {
-      const slot = this.startGridSlot(i + 1);
+      // AI cars start behind all humans on the grid: offset by humans.length so a 2-player race
+      // puts AI in slots 2..N rather than overlapping P2.
+      const slot = this.startGridSlot(this.humans.length + i);
       const team = aiTeamPool[i];
       const livery = {
         primary: team.primary,
@@ -192,26 +220,45 @@ export class RaceScene extends Phaser.Scene {
         chunk: -1,
       });
     }
-    this.cars = [this.player, ...this.ai];
+    this.cars = [...this.humans, ...this.ai];
 
     this.spawnPickups(8);
 
     this.cameras.main.setBounds(-3000, -3000, 6000, 6000);
-    this.cameras.main.startFollow(this.player.sprite, true, 0.12, 0.12);
-    this.cameras.main.setZoom(0.85);
+    if (this.humans.length === 1) {
+      // 1P: existing follow behaviour, look-ahead applied per frame in runRacing.
+      this.cameras.main.startFollow(this.player.sprite, true, 0.12, 0.12);
+      this.cameras.main.setZoom(0.85);
+    } else {
+      // 2P: camera is driven manually each frame in updateMultiplayerCamera() so the zoom can
+      // dynamically fit both players. Initial zoom is set conservatively until the first frame's
+      // fit-calculation runs.
+      this.cameras.main.setZoom(0.85);
+      this.cameras.main.centerOn(this.player.x, this.player.y);
+    }
 
-    this.hud = new Hud(this);
+    this.hud = new Hud(this, "left");
+    if (this.humans.length === 2) this.hud2 = new Hud(this, "right");
     this.touch = new TouchControls(this);
 
     this.uiCam = this.cameras.add(0, 0, this.scale.width, this.scale.height);
     this.uiCam.setName("ui");
-    const uiObjects = [...this.hud.objects, ...this.touch.objects];
+    const uiObjects = [
+      ...this.hud.objects,
+      ...(this.hud2?.objects ?? []),
+      ...this.touch.objects,
+    ];
     const uiSet = new Set<Phaser.GameObjects.GameObject>(uiObjects);
     const worldObjects = this.children.list.filter((c) => !uiSet.has(c));
     this.cameras.main.ignore(uiObjects);
     this.uiCam.ignore(worldObjects);
     this.cursors = this.input.keyboard!.createCursorKeys();
     this.spaceKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+    this.wKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.W);
+    this.aKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.A);
+    this.sKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.S);
+    this.dKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.D);
+    this.enterKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER);
     this.restartKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.R);
     this.escapeKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
 
@@ -372,8 +419,19 @@ export class RaceScene extends Phaser.Scene {
     if (this.state === "countdown") {
       this.runCountdown(now);
       for (const c of this.cars) c.update(dt, NO_INPUT);
-      const throttleHeld = this.cursors.up?.isDown || this.touch.state.throttle;
-      this.player.audioThrottle = throttleHeld ? 1 : 0;
+      // Audio-only throttle on the grid so the engine revs pre-race. We read keys directly
+      // (instead of routing through humanInput) so the touch's one-shot useItem latch stays
+      // armed for the moment the race starts.
+      const t = this.touch.state;
+      if (this.humans.length === 1) {
+        const held = this.cursors.up?.isDown || t.throttle;
+        this.humans[0].audioThrottle = held ? 1 : 0;
+      } else {
+        const p1Held = this.wKey.isDown || t.throttle;
+        const p2Held = this.cursors.up?.isDown ?? false;
+        this.humans[0].audioThrottle = p1Held ? 1 : 0;
+        this.humans[1].audioThrottle = p2Held ? 1 : 0;
+      }
       for (const ai of this.ai) ai.audioThrottle = 0;
     } else {
       this.runRacing(dt, now);
@@ -446,6 +504,91 @@ export class RaceScene extends Phaser.Scene {
     return { x: pts[idx].x, y: pts[idx].y, heading: this.track.startHeading };
   }
 
+  // Maps player index → CarInput. In 1P, P0 reads arrow keys + Space + touch (existing scheme).
+  // In 2P, P0 reads WASD + Space (touch still feeds P0) and P1 reads arrow keys + Enter.
+  // Touch always drives P0; sharing a phone between two players isn't a sensible UX.
+  private humanInput(playerIndex: number): CarInput {
+    const t = this.touch.state;
+    if (this.humans.length === 1) {
+      return {
+        throttle: this.cursors.up?.isDown || t.throttle ? 1 : 0,
+        brake: this.cursors.down?.isDown || t.brake ? 1 : 0,
+        steer:
+          (this.cursors.right?.isDown || t.right ? 1 : 0) -
+          (this.cursors.left?.isDown || t.left ? 1 : 0),
+        useItem: Phaser.Input.Keyboard.JustDown(this.spaceKey) || this.touch.consumeUseItem(),
+      };
+    }
+    if (playerIndex === 0) {
+      return {
+        throttle: this.wKey.isDown || t.throttle ? 1 : 0,
+        brake: this.sKey.isDown || t.brake ? 1 : 0,
+        steer:
+          (this.dKey.isDown || t.right ? 1 : 0) -
+          (this.aKey.isDown || t.left ? 1 : 0),
+        useItem: Phaser.Input.Keyboard.JustDown(this.spaceKey) || this.touch.consumeUseItem(),
+      };
+    }
+    // P2 (index 1).
+    return {
+      throttle: this.cursors.up?.isDown ? 1 : 0,
+      brake: this.cursors.down?.isDown ? 1 : 0,
+      steer:
+        (this.cursors.right?.isDown ? 1 : 0) -
+        (this.cursors.left?.isDown ? 1 : 0),
+      useItem: Phaser.Input.Keyboard.JustDown(this.enterKey),
+    };
+  }
+
+  // Camera driver. 1P uses Phaser's startFollow + per-frame look-ahead via setFollowOffset.
+  // 2P drops follow entirely and lerps zoom + center to keep both humans (or the surviving
+  // human if one has finished) framed in view with margin.
+  private updateRaceCamera(dt: number) {
+    const cam = this.cameras.main;
+    if (this.humans.length === 1) {
+      const lookK = 0.35;
+      const lookMax = 220;
+      const lookX = Phaser.Math.Clamp(this.player.vx * lookK, -lookMax, lookMax);
+      const lookY = Phaser.Math.Clamp(this.player.vy * lookK, -lookMax, lookMax);
+      cam.setFollowOffset(-lookX, -lookY);
+      return;
+    }
+
+    // Pick focus targets: any humans still racing. If both finished, fall back to all humans
+    // so the camera doesn't snap. The min-span guard prevents the zoom from jumping to max
+    // when both players cluster very close together.
+    const active = this.humans.filter((h) => h.finishedAtMs == null);
+    const focus = active.length > 0 ? active : this.humans;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const f of focus) {
+      if (f.x < minX) minX = f.x;
+      if (f.y < minY) minY = f.y;
+      if (f.x > maxX) maxX = f.x;
+      if (f.y > maxY) maxY = f.y;
+    }
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const margin = 280;
+    const spanX = Math.max(220, maxX - minX) + margin * 2;
+    const spanY = Math.max(220, maxY - minY) + margin * 2;
+    const fitZoom = Math.min(cam.width / spanX, cam.height / spanY);
+    const targetZoom = Phaser.Math.Clamp(fitZoom, 0.35, 0.85);
+
+    // Frame-rate independent lerp. Zoom transitions need to be slower than centering or
+    // sudden separations look jittery; the rates below were tuned empirically.
+    const zoomLerp = 1 - Math.exp(-dt * 4);
+    const centerLerp = 1 - Math.exp(-dt * 6);
+    cam.setZoom(cam.zoom + (targetZoom - cam.zoom) * zoomLerp);
+    // Phaser's cam.scrollX is `midX - cam.width / 2` (no zoom factor); use `midPoint` to read
+    // the actual world-space center so the lerp converges instead of drifting.
+    const curCx = cam.midPoint.x;
+    const curCy = cam.midPoint.y;
+    cam.centerOn(
+      curCx + (cx - curCx) * centerLerp,
+      curCy + (cy - curCy) * centerLerp,
+    );
+  }
+
   private runCountdown(now: number) {
     const elapsed = now - this.countdownStartedAt;
     if (elapsed < 1000) {
@@ -472,30 +615,19 @@ export class RaceScene extends Phaser.Scene {
   private runRacing(dt: number, now: number) {
     if (now - this.raceStartedAt > 1000) this.hud.hideCountdown();
 
-    const lookK = 0.35;
-    const lookMax = 220;
-    const lookX = Phaser.Math.Clamp(this.player.vx * lookK, -lookMax, lookMax);
-    const lookY = Phaser.Math.Clamp(this.player.vy * lookK, -lookMax, lookMax);
-    this.cameras.main.setFollowOffset(-lookX, -lookY);
+    this.updateRaceCamera(dt);
 
-    const playerActive = this.player.finishedAtMs == null;
-    const t = this.touch.state;
-    const playerInput: CarInput = playerActive
-      ? {
-          throttle: this.cursors.up?.isDown || t.throttle ? 1 : 0,
-          brake: this.cursors.down?.isDown || t.brake ? 1 : 0,
-          steer:
-            (this.cursors.right?.isDown || t.right ? 1 : 0) -
-            (this.cursors.left?.isDown || t.left ? 1 : 0),
-          useItem: Phaser.Input.Keyboard.JustDown(this.spaceKey) || this.touch.consumeUseItem(),
-        }
-      : NO_INPUT;
     for (const c of this.cars) c.draft = this.computeDraft(c);
 
-    this.player.audioThrottle = playerInput.throttle;
-    this.player.update(dt, playerInput, this.surfaceFeel(this.player));
-    if (playerActive && playerInput.useItem) this.useItem(this.player);
-    this.applyTrackBounds(this.player);
+    for (let i = 0; i < this.humans.length; i++) {
+      const human = this.humans[i];
+      const active = human.finishedAtMs == null;
+      const input = active ? this.humanInput(i) : NO_INPUT;
+      human.audioThrottle = input.throttle;
+      human.update(dt, input, this.surfaceFeel(human));
+      if (active && input.useItem) this.useItem(human);
+      this.applyTrackBounds(human);
+    }
 
     for (const ai of this.ai) {
       const aiActive = ai.finishedAtMs == null;
@@ -695,21 +827,28 @@ export class RaceScene extends Phaser.Scene {
     switch (item) {
       case "boost":
         car.giveBoost(2.0);
-        if (car.isPlayer) this.hud.flash("BOOST!", 700);
+        this.flashFor(car, "BOOST!", 700);
         break;
       case "missile":
         this.fireMissile(car);
-        if (car.isPlayer) this.hud.flash("MISSILE!", 700);
+        this.flashFor(car, "MISSILE!", 700);
         break;
       case "oil":
         this.dropOil(car);
-        if (car.isPlayer) this.hud.flash("OIL!", 700);
+        this.flashFor(car, "OIL!", 700);
         break;
       case "shield":
         car.shielded = true;
-        if (car.isPlayer) this.hud.flash("SHIELD!", 700);
+        this.flashFor(car, "SHIELD!", 700);
         break;
     }
+  }
+
+  // Routes a HUD flash to the right HUD slot. AI cars get no flash.
+  private flashFor(car: Car, text: string, ms: number) {
+    if (car.playerIndex == null) return;
+    const hud = car.playerIndex === 0 ? this.hud : this.hud2;
+    hud?.flash(text, ms);
   }
 
   private fireMissile(owner: Car) {
@@ -731,7 +870,7 @@ export class RaceScene extends Phaser.Scene {
       x, y,
       vx: fx * speed + owner.vx * 0.5,
       vy: fy * speed + owner.vy * 0.5,
-      ownerIsPlayer: owner === this.player,
+      owner,
       expiresAt: this.time.now + 4000,
     });
   }
@@ -744,10 +883,11 @@ export class RaceScene extends Phaser.Scene {
       m.y += m.vy * dt;
       m.sprite.setPosition(m.x, m.y);
 
-      const targets = m.ownerIsPlayer ? this.ai : [this.player];
+      // Lock onto any non-owner car within range, regardless of human/AI status.
       let nearest: Car | null = null;
       let nearestD = Infinity;
-      for (const c of targets) {
+      for (const c of this.cars) {
+        if (c === m.owner) continue;
         const d = Phaser.Math.Distance.Between(c.x, c.y, m.x, m.y);
         if (d < nearestD) { nearestD = d; nearest = c; }
       }
@@ -763,8 +903,7 @@ export class RaceScene extends Phaser.Scene {
 
       let hit = false;
       for (const c of this.cars) {
-        if (m.ownerIsPlayer && c.isPlayer) continue;
-        if (!m.ownerIsPlayer && !c.isPlayer) continue;
+        if (c === m.owner) continue;
         if (Phaser.Math.Distance.Between(c.x, c.y, m.x, m.y) < 22) {
           if (!c.spin(1.2)) this.spawnShieldFlash(c);
           hit = true;
@@ -837,7 +976,7 @@ export class RaceScene extends Phaser.Scene {
       },
       onComplete: () => g.destroy(),
     });
-    if (car.isPlayer) this.hud.flash("BLOCKED!", 600);
+    this.flashFor(car, "BLOCKED!", 600);
   }
 
   private handleCarCollisions() {
@@ -887,7 +1026,7 @@ export class RaceScene extends Phaser.Scene {
     const lapMs = now - car.currentLapStartMs;
     if (car.bestLapMs == null || lapMs < car.bestLapMs) {
       car.bestLapMs = lapMs;
-      if (car.isPlayer) this.hud.flash("BEST LAP!", 1500);
+      this.flashFor(car, "BEST LAP!", 1500);
     }
     car.currentLapStartMs = now;
     car.lap++;
@@ -933,8 +1072,11 @@ export class RaceScene extends Phaser.Scene {
   private showResults() {
     const sorted = this.rankedCars();
     const allDone = this.cars.every((c) => c.finishedAtMs != null);
-    const playerActive = this.player.finishedAtMs == null;
-    const compact = playerActive && !allDone;
+    // In 2P we keep the compact panel while *any* human is still racing — flip to the full
+    // RACE OVER panel only when both humans have crossed the line. Mirrors the 1P semantics
+    // (where there is only one human anyway).
+    const anyHumanActive = this.humans.some((h) => h.finishedAtMs == null);
+    const compact = anyHumanActive && !allDone;
 
     const lines: string[] = [];
     let prevCar: Car | null = null;
@@ -983,21 +1125,32 @@ export class RaceScene extends Phaser.Scene {
   }
 
   private updateHud(now: number) {
-    const speedKph = this.player.speed * 0.36;
-    this.hud.setSpeed(speedKph);
-    this.hud.setLap(this.player.lap + 1, this.totalLaps);
-
     const elapsed =
       this.state === "countdown"
         ? 0
         : this.state === "racing"
           ? now - this.raceStartedAt
           : this.raceEndedAt - this.raceStartedAt;
-    this.hud.setTime(elapsed);
-    this.hud.setBest(this.player.bestLapMs);
-    this.hud.setItem(this.player.itemSlot);
-    this.hud.setPositions(this.computePositions(), this.totalLaps);
-    this.hud.update();
+    const positions = this.computePositions();
+    const multi = this.humans.length === 2;
+
+    // Drive each visible HUD slot from its corresponding human car.
+    const slots: { hud: Hud; car: Car; useKey: string }[] = [
+      { hud: this.hud, car: this.humans[0], useKey: multi ? "SPACE" : "SPACE" },
+    ];
+    if (multi && this.hud2) slots.push({ hud: this.hud2, car: this.humans[1], useKey: "ENTER" });
+
+    for (const s of slots) {
+      s.hud.setSpeed(s.car.speed * 0.36);
+      s.hud.setLap(s.car.lap + 1, this.totalLaps);
+      s.hud.setTime(elapsed);
+      s.hud.setBest(s.car.bestLapMs);
+      s.hud.setItem(s.car.itemSlot, s.useKey);
+    }
+    // Position panel only lives on the left HUD; in 2P it's repositioned to bottom-center.
+    this.hud.setPositions(positions, this.totalLaps);
+    this.hud.update(multi);
+    this.hud2?.update(multi);
   }
 }
 

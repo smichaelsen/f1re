@@ -24,6 +24,9 @@ export const LAPS_MIN = 1;
 export const LAPS_MAX = 10;
 export const OPPONENTS_MIN = 1;
 export const OPPONENTS_MAX = 9;
+export const PLAYERS_MIN = 1;
+export const PLAYERS_MAX = 2;
+export type PlayerCount = 1 | 2;
 
 const TRACKS: { key: TrackKey; label: string; sub: string }[] = [
   { key: "oval", label: "OVAL", sub: "sweeping bends" },
@@ -48,24 +51,32 @@ interface CounterButtons {
 
 type View = "main" | "settings";
 
-const CONTENT_HEIGHT = 880;
+const CONTENT_HEIGHT = 940;
 
 export class MenuScene extends Phaser.Scene {
   selectedTeam: TeamId = DEFAULT_TEAM_ID;
+  // P2's team. Defaults to a different team than P1 so 2P out-of-the-box has visually distinct cars,
+  // but the user is free to pick the same team for both — duplicate liveries are allowed.
+  selectedTeam2: TeamId = (TEAMS[1]?.id ?? DEFAULT_TEAM_ID) as TeamId;
   selectedTrack: TrackKey = "oval";
   selectedDifficulty: Difficulty = "normal";
   laps: number = 3;
   opponents: number = 5;
+  players: PlayerCount = 1;
 
   view: View = "main";
   mainObjects: Phaser.GameObjects.GameObject[] = [];
   settingsObjects: Phaser.GameObjects.GameObject[] = [];
 
+  teamLabel!: Phaser.GameObjects.Text;
+  teamLabel2!: Phaser.GameObjects.Text;
   teamCarousel?: Carousel<Team>;
+  teamCarousel2?: Carousel<Team>;
   trackButtons: { key: TrackKey; bg: Phaser.GameObjects.Rectangle; label: Phaser.GameObjects.Text; sub: Phaser.GameObjects.Text }[] = [];
   difficultyButtons: { key: Difficulty; bg: Phaser.GameObjects.Rectangle; label: Phaser.GameObjects.Text }[] = [];
   lapsCounter!: CounterButtons;
   opponentsCounter!: CounterButtons;
+  playersCounter!: CounterButtons;
   startBtn!: Phaser.GameObjects.Text;
   settingsBtn!: Phaser.GameObjects.Text;
   inspectBtn!: Phaser.GameObjects.Text;
@@ -141,7 +152,7 @@ export class MenuScene extends Phaser.Scene {
   }
 
   private buildMainView(cx: number) {
-    this.addMain(this.add
+    this.teamLabel = this.addMain(this.add
       .text(cx, 230, "TEAM", {
         fontFamily: "system-ui, sans-serif",
         fontSize: "20px",
@@ -149,6 +160,21 @@ export class MenuScene extends Phaser.Scene {
         fontStyle: "bold",
       })
       .setOrigin(0.5));
+
+    const renderTeam = (scene: Phaser.Scene, container: Phaser.GameObjects.Container, team: Team) => {
+      const car = scene.add
+        .sprite(0, -18, ensureCarTexture(scene, { primary: team.primary, secondary: team.secondary, variant: "sidepods" }))
+        .setScale(2.4);
+      const name = scene.add
+        .text(0, 22, team.name.toUpperCase(), {
+          fontFamily: "system-ui, sans-serif",
+          fontSize: "20px",
+          color: "#ffd24a",
+          fontStyle: "bold",
+        })
+        .setOrigin(0.5);
+      container.add([car, name]);
+    };
 
     this.teamCarousel = new Carousel<Team>({
       scene: this,
@@ -160,22 +186,35 @@ export class MenuScene extends Phaser.Scene {
       onChange: (team) => {
         this.selectedTeam = team.id as TeamId;
       },
-      renderItem: (scene, container, team) => {
-        const car = scene.add
-          .sprite(0, -18, ensureCarTexture(scene, { primary: team.primary, secondary: team.secondary, variant: "sidepods" }))
-          .setScale(2.4);
-        const name = scene.add
-          .text(0, 22, team.name.toUpperCase(), {
-            fontFamily: "system-ui, sans-serif",
-            fontSize: "20px",
-            color: "#ffd24a",
-            fontStyle: "bold",
-          })
-          .setOrigin(0.5);
-        container.add([car, name]);
-      },
+      renderItem: renderTeam,
     });
     this.addMain(this.teamCarousel.container);
+
+    // P2 carousel + label live in the main view but stay hidden until 2P is selected in settings.
+    // Initial position is offscreen-friendly (cx); applyPlayersLayout() repositions both when 2P toggles.
+    this.teamLabel2 = this.addMain(this.add
+      .text(cx, 230, "P2 TEAM", {
+        fontFamily: "system-ui, sans-serif",
+        fontSize: "20px",
+        color: "#888888",
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5)
+      .setVisible(false));
+    this.teamCarousel2 = new Carousel<Team>({
+      scene: this,
+      x: cx,
+      y: 305,
+      width: 320,
+      items: TEAMS,
+      initialId: this.selectedTeam2,
+      onChange: (team) => {
+        this.selectedTeam2 = team.id as TeamId;
+      },
+      renderItem: renderTeam,
+    });
+    this.teamCarousel2.container.setVisible(false);
+    this.addMain(this.teamCarousel2.container);
 
     this.addMain(this.add
       .text(cx, 410, "TRACK", {
@@ -316,8 +355,13 @@ export class MenuScene extends Phaser.Scene {
       this.refresh();
     }, this.settingsObjects);
 
+    this.playersCounter = this.makeCounter(cx, 700, "PLAYERS (LOCAL)", () => this.players, (v) => {
+      this.players = Phaser.Math.Clamp(v, PLAYERS_MIN, PLAYERS_MAX) as PlayerCount;
+      this.refresh();
+    }, this.settingsObjects);
+
     this.doneBtn = this.addSettings(this.add
-      .text(cx, 720, "DONE", {
+      .text(cx, 790, "DONE", {
         fontFamily: "system-ui, sans-serif",
         fontSize: "24px",
         color: "#1a1a1a",
@@ -336,7 +380,7 @@ export class MenuScene extends Phaser.Scene {
 
   private buildCredits(cx: number) {
     this.addSettings(this.add
-      .text(cx, 790, "AUDIO CREDITS", {
+      .text(cx, 850, "AUDIO CREDITS", {
         fontFamily: "system-ui, sans-serif",
         fontSize: "13px",
         color: "#666666",
@@ -353,7 +397,7 @@ export class MenuScene extends Phaser.Scene {
     this.addSettings(this.add
       .text(
         cx,
-        815,
+        875,
         "Engine loop — domasx2 (OpenGameArt) — CC0",
         lineStyle,
       )
@@ -362,7 +406,7 @@ export class MenuScene extends Phaser.Scene {
     this.addSettings(this.add
       .text(
         cx,
-        835,
+        895,
         "Tire skid loop — Tom Haigh / audible-edge (OpenGameArt) — CC-BY 3.0",
         lineStyle,
       )
@@ -385,6 +429,9 @@ export class MenuScene extends Phaser.Scene {
     for (const o of this.mainObjects) (o as unknown as { setVisible: (v: boolean) => void }).setVisible(onMain);
     for (const o of this.settingsObjects) (o as unknown as { setVisible: (v: boolean) => void }).setVisible(!onMain);
     this.hintText?.setText(onMain ? "click to pick · ENTER to start" : "click to adjust · ESC to back");
+    // P2 carousel is in `mainObjects`, so the loop above unconditionally shows it on main —
+    // re-apply the players-aware layout to hide it again when in 1P mode.
+    if (onMain) this.applyPlayersLayout();
   }
 
   private refresh() {
@@ -402,6 +449,30 @@ export class MenuScene extends Phaser.Scene {
     }
     this.lapsCounter?.value.setText(String(this.laps));
     this.opponentsCounter?.value.setText(String(this.opponents));
+    this.playersCounter?.value.setText(String(this.players));
+    this.applyPlayersLayout();
+  }
+
+  // Reposition + show/hide team carousels based on `players` count. In 1P the single carousel
+  // sits centered (current behaviour). In 2P we split: P1 on the left, P2 on the right, both
+  // with their own labels. Carousels are created once in buildMainView and only repositioned here.
+  private applyPlayersLayout() {
+    if (!this.teamCarousel || !this.teamCarousel2) return;
+    const cam = this.cameras.main;
+    const cx = cam.width / 2;
+    if (this.players === 2) {
+      this.teamLabel?.setText("P1 TEAM");
+      this.teamLabel?.setPosition(cx - 200, 230);
+      this.teamCarousel.container.setPosition(cx - 200, 305);
+      this.teamLabel2?.setText("P2 TEAM").setPosition(cx + 200, 230).setVisible(this.view === "main");
+      this.teamCarousel2.container.setPosition(cx + 200, 305).setVisible(this.view === "main");
+    } else {
+      this.teamLabel?.setText("TEAM");
+      this.teamLabel?.setPosition(cx, 230);
+      this.teamCarousel.container.setPosition(cx, 305);
+      this.teamLabel2?.setVisible(false);
+      this.teamCarousel2.container.setVisible(false);
+    }
   }
 
   private makeCounter(
@@ -460,6 +531,8 @@ export class MenuScene extends Phaser.Scene {
     this.scene.start("RaceScene", {
       trackKey: this.selectedTrack,
       teamId: this.selectedTeam,
+      teamId2: this.selectedTeam2,
+      players: this.players,
       difficulty: this.selectedDifficulty,
       laps: this.laps,
       opponents: this.opponents,

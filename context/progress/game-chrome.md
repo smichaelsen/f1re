@@ -7,7 +7,7 @@ Everything outside the track + physics + items: the framing, the HUD, the menus,
 ### Engine + bootstrap
 - Phaser 3 + TypeScript + Vite scaffold (port 5273 dev, 4273 preview).
 - BootScene generates car + pickup textures procedurally.
-- MenuScene split into two views: **main** (team carousel + track + START RACE + SETTINGS + INSPECT) and **settings** (DIFFICULTY / LAPS 1-10 / OPPONENTS 1-9 / DONE). `setView()` toggles visibility of `mainObjects` / `settingsObjects` arrays; ESC backs out of settings. Defaults: laps 3, opponents 5. Difficulty maps to `DIFFICULTIES` table (perfRange for accel/grip/maxSpeed, skillRange for AI aim quality); RaceScene reads the settings from init data.
+- MenuScene split into two views: **main** (team carousel + track + START RACE + SETTINGS + INSPECT) and **settings** (DIFFICULTY / LAPS 1-10 / OPPONENTS 1-9 / PLAYERS 1-2 / DONE). `setView()` toggles visibility of `mainObjects` / `settingsObjects` arrays; ESC backs out of settings. Defaults: laps 3, opponents 5, players 1. Difficulty maps to `DIFFICULTIES` table (perfRange for accel/grip/maxSpeed, skillRange for AI aim quality); RaceScene reads the settings from init data.
 - Camera is bounded to a fixed `CONTENT_HEIGHT` (800) so wheel events scroll the menu vertically when the viewport is shorter. The bottom hint text uses `setScrollFactor(0)` so it stays pinned at the viewport bottom.
 - RaceScene state machine: countdown → racing → finished. ESC always returns to menu.
 
@@ -49,6 +49,18 @@ Everything outside the track + physics + items: the framing, the HUD, the menus,
 - Multi-touch: `RaceScene` calls `input.addPointer(3)` (5 total). Each frame `TouchControls.update()` walks `input.manager.pointers`, hit-tests each active pointer against every zone (circle test), and sets per-zone booleans. Item is edge-triggered (rising-edge consumed by `consumeUseItem()`).
 - Input combine: `runRacing` ORs keyboard + touch state per axis so hybrid devices work. ESC/R remain keyboard-only for now.
 - Landscape gate: pure CSS media query in `index.html` swaps `#game` for a `#rotate-prompt` overlay when `(pointer: coarse)` AND (orientation: portrait OR width<700 OR height<360).
+
+### Local 2-player mode (experimental — `multiplayer-local` branch)
+- Settings: `PLAYERS (LOCAL)` counter (1–2). When 2 is selected the main view splits the team carousel into `P1 TEAM` / `P2 TEAM` side-by-side; `MenuScene.applyPlayersLayout()` repositions both whenever `players` changes or the view re-enters main.
+- `Car.playerIndex: number | null` — 0 / 1 for humans, null for AI. AI is unchanged. `RaceScene.humans: Car[]` holds the active humans; `RaceScene.player` remains an alias for `humans[0]` so single-player code paths stay short.
+- AI grid offset bumps with human count (`startGridSlot(humans.length + i)`), so 2P starts AI in slots 2..N rather than overlapping P2.
+- **Controls.** 1P keeps arrow keys + Space (unchanged). 2P splits: P1 = WASD + Space, P2 = arrow keys + Enter. Touch controls always feed P0 (sharing one phone is not worth supporting).
+- **Camera.** 1P keeps `startFollow` + per-frame `setFollowOffset` look-ahead. 2P drops follow entirely — `updateRaceCamera()` lerps zoom + center each frame to fit both humans (or the surviving one) plus a 280px margin, clamped to `[0.35, 0.85]`. Lerp uses `cam.midPoint` to read current center; computing it from `scrollX + width / (2 * zoom)` is wrong because Phaser's `scrollX = midX - cam.width/2` (no zoom factor) — that bug caused the camera to drift away from the target instead of converging.
+- **HUD.** `Hud(scene, side: 'left' | 'right')`. Left HUD always exists and owns the shared overlays (countdown, results, position panel). Right HUD only exists in 2P and shows P2's stats mirrored to the right edge. `Hud.update(multi)` flips the position panel to bottom-center in 2P so it doesn't collide with the P2 stats column. HUD flashes (`BOOST!`, `MISSILE!`, `BLOCKED!`, `BEST LAP!`) route via `flashFor(car, ...)` keyed off `car.playerIndex`.
+- **Missile targeting** changed from `ownerIsPlayer` boolean to a direct `owner: Car` ref. Missiles lock onto any non-owner car within range — humans can shoot each other in 2P (intentional).
+- **Results.** Compact panel stays up while *any* human is still racing; flips to full `RACE OVER` only when all humans have finished. AI-only finishing doesn't trigger the full overlay anymore.
+- **Audio listener** stays at `humans[0]` (P1) for now. Switching to midpoint mid-race made the spatial mix feel unstable.
+- **Open question.** P1/P2 humans share their team's livery; the position panel reads e.g. `P3 P1 L2` which is mildly confusing because the position prefix and the player name both lead with "P". Could rename humans to `Y1`/`Y2` or use the team short code if it gets reported as a problem.
 
 ### Camera polish (race)
 - World camera zoom dropped from 0.9 → 0.85 for a wider preview of the upcoming track.
