@@ -26,12 +26,16 @@ const DEFAULTS: AudioBusConfig = {
   masterGain: 0.35,
 };
 
+export interface ListenerPos { x: number; y: number; }
+
 export class AudioBus {
   readonly ctx: AudioContext;
   private readonly master: GainNode;
   private readonly sources: PositionalSource[] = [];
-  private listenerX = 0;
-  private listenerY = 0;
+  // Multiple listeners enable local 2-player mixing: each source's gain is the average
+  // of the per-listener falloff gains. With one listener, the average is the single value
+  // (no behavioural change vs. the old single-listener API).
+  private listeners: ListenerPos[] = [{ x: 0, y: 0 }];
   readonly config: AudioBusConfig;
 
   constructor(config: Partial<AudioBusConfig> = {}) {
@@ -50,41 +54,46 @@ export class AudioBus {
   }
 
   setListener(x: number, y: number) {
-    this.listenerX = x;
-    this.listenerY = y;
+    this.listeners = [{ x, y }];
+  }
+
+  setListeners(positions: ListenerPos[]) {
+    if (positions.length === 0) return;
+    // Take a defensive copy so callers can mutate their own arrays freely.
+    this.listeners = positions.map((p) => ({ x: p.x, y: p.y }));
   }
 
   add(source: PositionalSource) {
     this.sources.push(source);
   }
 
-  // Positional gain at a fixed point, sampled now. For one-shot sounds that don't
-  // need per-frame tracking — they fire-and-forget at trigger-time gain.
-  instantaneousGain(x: number, y: number): number {
-    const { refDistance, maxDistance } = this.config;
-    const dx = x - this.listenerX;
-    const dy = y - this.listenerY;
-    const dSq = dx * dx + dy * dy;
-    if (dSq >= maxDistance * maxDistance) return 0;
-    return 1 / (1 + dSq / (refDistance * refDistance));
-  }
-
-  update() {
+  private gainFor(x: number, y: number): number {
     const { refDistance, maxDistance } = this.config;
     const refSq = refDistance * refDistance;
     const maxSq = maxDistance * maxDistance;
+    let sum = 0;
+    for (const l of this.listeners) {
+      const dx = x - l.x;
+      const dy = y - l.y;
+      const dSq = dx * dx + dy * dy;
+      if (dSq >= maxSq) continue;
+      sum += 1 / (1 + dSq / refSq);
+    }
+    // 50/50 mix: each listener contributes equally regardless of which is closer.
+    // With N listeners this generalises to a 1/N weighting per listener.
+    return sum / this.listeners.length;
+  }
+
+  // Positional gain at a fixed point, sampled now. For one-shot sounds that don't
+  // need per-frame tracking — they fire-and-forget at trigger-time gain.
+  instantaneousGain(x: number, y: number): number {
+    return this.gainFor(x, y);
+  }
+
+  update() {
     for (const s of this.sources) {
       const p = s.getPosition();
-      const dx = p.x - this.listenerX;
-      const dy = p.y - this.listenerY;
-      const dSq = dx * dx + dy * dy;
-      let gain: number;
-      if (dSq >= maxSq) {
-        gain = 0;
-      } else {
-        gain = 1 / (1 + dSq / refSq);
-      }
-      s.setPositionalGain(gain);
+      s.setPositionalGain(this.gainFor(p.x, p.y));
     }
   }
 

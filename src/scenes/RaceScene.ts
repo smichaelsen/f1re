@@ -353,7 +353,9 @@ export class RaceScene extends Phaser.Scene {
   private updateAudio() {
     if (!this.audioBus) return;
     const now = this.time.now;
-    this.audioBus.setListener(this.player.x, this.player.y);
+    // 1P: single listener at the player. 2P: both humans listen, each contributing 50/50
+    // to every source's mix — same falloff curve, just summed and averaged.
+    this.audioBus.setListeners(this.humans.map((h) => ({ x: h.x, y: h.y })));
     for (const car of this.cars) {
       const engine = this.engines.get(car);
       if (engine) {

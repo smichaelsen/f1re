@@ -59,7 +59,7 @@ Everything outside the track + physics + items: the framing, the HUD, the menus,
 - **HUD.** `Hud(scene, side: 'left' | 'right')`. Left HUD always exists and owns the shared overlays (countdown, results, position panel). Right HUD only exists in 2P and shows P2's stats mirrored to the right edge. `Hud.update(multi)` flips the position panel to bottom-center in 2P so it doesn't collide with the P2 stats column. HUD flashes (`BOOST!`, `MISSILE!`, `BLOCKED!`, `BEST LAP!`) route via `flashFor(car, ...)` keyed off `car.playerIndex`.
 - **Missile targeting** changed from `ownerIsPlayer` boolean to a direct `owner: Car` ref. Missiles lock onto any non-owner car within range — humans can shoot each other in 2P (intentional).
 - **Results.** Compact panel stays up while *any* human is still racing; flips to full `RACE OVER` only when all humans have finished. AI-only finishing doesn't trigger the full overlay anymore.
-- **Audio listener** stays at `humans[0]` (P1) for now. Switching to midpoint mid-race made the spatial mix feel unstable.
+- **Audio.** Both humans are registered as bus listeners; each source's gain is averaged 50/50 across them (`AudioBus.setListeners`). A sound right next to one player still drops to ~0.5 in 2P — intentional, so neither player loses spatial awareness when the field splits.
 - **Open question.** P1/P2 humans share their team's livery; the position panel reads e.g. `P3 P1 L2` which is mildly confusing because the position prefix and the player name both lead with "P". Could rename humans to `Y1`/`Y2` or use the team short code if it gets reported as a problem.
 
 ### Camera polish (race)
