@@ -60,6 +60,13 @@ interface DrsModeButtons {
   buttons: { mode: DrsMode; bg: Phaser.GameObjects.Rectangle; label: Phaser.GameObjects.Text }[];
 }
 
+type CamMode = "fixed" | "cockpit";
+const CAM_MODE_OPTIONS: CamMode[] = ["fixed", "cockpit"];
+interface CamModeButtons {
+  label: Phaser.GameObjects.Text;
+  buttons: { mode: CamMode; bg: Phaser.GameObjects.Rectangle; label: Phaser.GameObjects.Text }[];
+}
+
 export const TRACK_KEYS: TrackKey[] = TRACKS.map((t) => t.key);
 
 interface CounterButtons {
@@ -84,7 +91,7 @@ const INPUT_DEBUG_ROWS = 4;
 
 type View = "main" | "settings";
 
-const CONTENT_HEIGHT = 1080;
+const CONTENT_HEIGHT = 950;
 
 export class MenuScene extends Phaser.Scene {
   selectedTeam: TeamId = DEFAULT_TEAM_ID;
@@ -96,6 +103,7 @@ export class MenuScene extends Phaser.Scene {
   laps: number = 3;
   opponents: number = 5;
   players: PlayerCount = 1;
+  cockpitCam: boolean = false;
 
   view: View = "main";
   mainObjects: Phaser.GameObjects.GameObject[] = [];
@@ -126,6 +134,7 @@ export class MenuScene extends Phaser.Scene {
   drsModes: DrsModes = loadDrsModes();
   drsModeP1: DrsModeButtons | null = null;
   drsModeP2: DrsModeButtons | null = null;
+  cockpitCamButtons: CamModeButtons | null = null;
   // Debug panel: list of connected pads with live trigger/stick values + which slot they're bound to.
   padDebugTitle!: Phaser.GameObjects.Text;
   padDebugRows: Phaser.GameObjects.Text[] = [];
@@ -153,6 +162,7 @@ export class MenuScene extends Phaser.Scene {
     this.laps = prefs.laps;
     this.opponents = prefs.opponents;
     this.players = prefs.players;
+    this.cockpitCam = prefs.cockpitCam;
 
     const cam = this.cameras.main;
     const cx = cam.width / 2;
@@ -507,29 +517,33 @@ export class MenuScene extends Phaser.Scene {
       dx += dw + dgap;
     }
 
-    this.lapsCounter = this.makeCounter(cx, 490, "LAPS", () => this.laps, (v) => {
+    // Counters in a single row to keep the settings panel short on 1080p screens.
+    const counterRowY = 490;
+    this.lapsCounter = this.makeCounter(cx - 260, counterRowY, "LAPS", () => this.laps, (v) => {
       this.laps = Phaser.Math.Clamp(v, LAPS_MIN, LAPS_MAX);
       this.savePrefs();
       this.refresh();
     }, this.settingsObjects);
 
-    this.opponentsCounter = this.makeCounter(cx, 600, "OPPONENTS", () => this.opponents, (v) => {
+    this.opponentsCounter = this.makeCounter(cx, counterRowY, "OPPONENTS", () => this.opponents, (v) => {
       this.opponents = Phaser.Math.Clamp(v, OPPONENTS_MIN, OPPONENTS_MAX);
       this.savePrefs();
       this.refresh();
     }, this.settingsObjects);
 
-    this.playersCounter = this.makeCounter(cx, 700, "PLAYERS (LOCAL)", () => this.players, (v) => {
+    this.playersCounter = this.makeCounter(cx + 260, counterRowY, "PLAYERS (LOCAL)", () => this.players, (v) => {
       this.players = Phaser.Math.Clamp(v, PLAYERS_MIN, PLAYERS_MAX) as PlayerCount;
       this.savePrefs();
       this.refresh();
     }, this.settingsObjects);
 
-    this.drsModeP1 = this.makeDrsModePicker(cx - 200, 800, "DRS — P1", "p1");
-    this.drsModeP2 = this.makeDrsModePicker(cx + 200, 800, "DRS — P2", "p2");
+    this.drsModeP1 = this.makeDrsModePicker(cx - 200, 610, "DRS — P1", "p1");
+    this.drsModeP2 = this.makeDrsModePicker(cx + 200, 610, "DRS — P2", "p2");
+
+    this.cockpitCamButtons = this.makeCockpitCamPicker(cx, 720, "CAMERA (1P ONLY)");
 
     this.doneBtn = this.addSettings(this.add
-      .text(cx, 920, "DONE", {
+      .text(cx, 810, "DONE", {
         fontFamily: "system-ui, sans-serif",
         fontSize: "24px",
         color: "#1a1a1a",
@@ -548,7 +562,7 @@ export class MenuScene extends Phaser.Scene {
 
   private buildCredits(cx: number) {
     this.addSettings(this.add
-      .text(cx, 990, "AUDIO CREDITS", {
+      .text(cx, 880, "AUDIO CREDITS", {
         fontFamily: "system-ui, sans-serif",
         fontSize: "13px",
         color: "#666666",
@@ -565,7 +579,7 @@ export class MenuScene extends Phaser.Scene {
     this.addSettings(this.add
       .text(
         cx,
-        1015,
+        905,
         "Engine loop — domasx2 (OpenGameArt) — CC0",
         lineStyle,
       )
@@ -574,7 +588,7 @@ export class MenuScene extends Phaser.Scene {
     this.addSettings(this.add
       .text(
         cx,
-        1035,
+        925,
         "Tire skid loop — Tom Haigh / audible-edge (OpenGameArt) — CC-BY 3.0",
         lineStyle,
       )
@@ -629,6 +643,47 @@ export class MenuScene extends Phaser.Scene {
     return { label: labelText, buttons };
   }
 
+  // Two-button camera-mode picker (FIXED top-down vs COCKPIT car-locked rotation). Mirrors the
+  // DRS picker layout. The whole row only renders in 1P (gated in `refreshCockpitCamButtons`).
+  private makeCockpitCamPicker(cx: number, y: number, label: string): CamModeButtons {
+    const labelText = this.addSettings(this.add
+      .text(cx, y - 32, label, {
+        fontFamily: "system-ui, sans-serif",
+        fontSize: "14px",
+        color: "#888888",
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5));
+    const bw = 130;
+    const bh = 38;
+    const gap = 12;
+    const totalW = CAM_MODE_OPTIONS.length * bw + (CAM_MODE_OPTIONS.length - 1) * gap;
+    let bx = cx - totalW / 2 + bw / 2;
+    const buttons: CamModeButtons["buttons"] = [];
+    for (const mode of CAM_MODE_OPTIONS) {
+      const bg = this.addSettings(this.add
+        .rectangle(bx, y, bw, bh, 0x222222)
+        .setStrokeStyle(2, 0x444444)
+        .setInteractive({ useHandCursor: true }));
+      const lab = this.addSettings(this.add
+        .text(bx, y, mode === "fixed" ? "TOP-DOWN" : "COCKPIT", {
+          fontFamily: "system-ui, sans-serif",
+          fontSize: "16px",
+          color: "#ffffff",
+          fontStyle: "bold",
+        })
+        .setOrigin(0.5));
+      bg.on("pointerdown", () => {
+        this.cockpitCam = mode === "cockpit";
+        this.savePrefs();
+        this.refresh();
+      });
+      buttons.push({ mode, bg, label: lab });
+      bx += bw + gap;
+    }
+    return { label: labelText, buttons };
+  }
+
   private savePrefs() {
     saveMenuPrefs({
       track: this.selectedTrack,
@@ -638,6 +693,7 @@ export class MenuScene extends Phaser.Scene {
       laps: this.laps,
       opponents: this.opponents,
       players: this.players,
+      cockpitCam: this.cockpitCam,
     });
   }
 
@@ -683,7 +739,23 @@ export class MenuScene extends Phaser.Scene {
     this.playersCounter?.value.setText(String(this.players));
     this.refreshDrsButtons(this.drsModeP1, this.drsModes.p1, true);
     this.refreshDrsButtons(this.drsModeP2, this.drsModes.p2, this.players === 2);
+    this.refreshCockpitCamButtons();
     this.applyPlayersLayout();
+  }
+
+  private refreshCockpitCamButtons() {
+    if (!this.cockpitCamButtons) return;
+    const visible = this.players === 1 && this.view === "settings";
+    this.cockpitCamButtons.label.setVisible(visible);
+    const current: CamMode = this.cockpitCam ? "cockpit" : "fixed";
+    for (const b of this.cockpitCamButtons.buttons) {
+      b.bg.setVisible(visible);
+      b.label.setVisible(visible);
+      const selected = b.mode === current;
+      b.bg.setStrokeStyle(selected ? 3 : 2, selected ? 0xffd24a : 0x444444);
+      b.bg.setFillStyle(selected ? 0x2a2a2a : 0x1d1d1d);
+      b.label.setColor(selected ? "#ffd24a" : "#ffffff");
+    }
   }
 
   private refreshDrsButtons(group: DrsModeButtons | null, current: DrsMode, visible: boolean) {
@@ -857,6 +929,7 @@ export class MenuScene extends Phaser.Scene {
       opponents: this.opponents,
       inputSources,
       drsModes: this.drsModes,
+      cockpitCam: this.players === 1 && this.cockpitCam,
     });
   }
 

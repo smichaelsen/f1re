@@ -43,6 +43,9 @@ interface RaceInit {
   inputSources?: (InputSource | null)[];
   // Per-player DRS activation mode. Falls back to localStorage / defaults when omitted.
   drsModes?: DrsModes;
+  // 1P-only: rotate the world so player heading is always up. Ignored in 2P (split-screen camera
+  // owns its own framing).
+  cockpitCam?: boolean;
 }
 const ITEMS = ["boost", "missile", "seeker", "oil", "shield"] as const;
 type Item = (typeof ITEMS)[number];
@@ -53,8 +56,6 @@ interface Pickup {
   sprite: Phaser.GameObjects.Sprite;
   active: boolean;
   respawnAt: number;
-  baseX: number;
-  baseY: number;
 }
 
 interface OilSlick {
@@ -221,6 +222,8 @@ export class RaceScene extends Phaser.Scene {
   drsState = new Map<Car, DrsCarState>();
   escapeKey!: Phaser.Input.Keyboard.Key;
   uiCam!: Phaser.Cameras.Scene2D.Camera;
+  private cockpitCam = false;
+  private cockpitCamRotation = 0;
 
   constructor() {
     super("RaceScene");
@@ -236,6 +239,8 @@ export class RaceScene extends Phaser.Scene {
     this.opponentCount = Phaser.Math.Clamp(data.opponents ?? 3, OPPONENTS_MIN, OPPONENTS_MAX);
     this.inputSources = (data.inputSources ?? []).slice(0, this.playerCount);
     this.drsModes = data.drsModes ?? loadDrsModes();
+    // 2P always uses fit-to-both framing; cockpit-cam is a 1P-only experiment for now.
+    this.cockpitCam = (data.cockpitCam ?? false) && this.playerCount === 1;
   }
 
   preload() {
@@ -354,13 +359,19 @@ export class RaceScene extends Phaser.Scene {
       });
     }
 
-    this.spawnPickups(8);
+    this.spawnPickups(this.pickupCountForTrack());
 
     this.cameras.main.setBounds(-3000, -3000, 6000, 6000);
     if (this.humans.length === 1) {
       // 1P: existing follow behaviour, look-ahead applied per frame in runRacing.
       this.cameras.main.startFollow(this.player.sprite, true, 0.12, 0.12);
       this.cameras.main.setZoom(0.85);
+      if (this.cockpitCam) {
+        // Align world rotation to player heading on grid so the first frame already looks
+        // correct (no wind-up from rotation 0 during the countdown).
+        this.cockpitCamRotation = -this.player.heading - Math.PI / 2;
+        this.cameras.main.setRotation(this.cockpitCamRotation);
+      }
     } else {
       // 2P: camera is driven manually each frame in updateMultiplayerCamera() so the zoom can
       // dynamically fit both players. Initial zoom is set conservatively until the first frame's
@@ -738,6 +749,26 @@ export class RaceScene extends Phaser.Scene {
   private updateRaceCamera(dt: number) {
     const cam = this.cameras.main;
     if (this.humans.length === 1) {
+      if (this.cockpitCam) {
+        // Rotate world so player heading always points up. Look-ahead disabled because the
+        // rotation already previews what's ahead and a world-space offset would rotate with
+        // the camera (sliding the car off-screen sideways).
+        cam.setFollowOffset(0, 0);
+        // While spinning the heading rotates several times per second; tracking it would induce
+        // motion sickness and obscure the visual cue that *the car* is spinning. Hold the last
+        // pre-spin rotation; on recovery, the lerp re-acquires the heading naturally.
+        if (this.player.spinTimer <= 0) {
+          const targetRot = -this.player.heading - Math.PI / 2;
+          // Shortest-arc lerp so wraparound from +π to -π doesn't whip the view.
+          let delta = targetRot - this.cockpitCamRotation;
+          while (delta > Math.PI) delta -= Math.PI * 2;
+          while (delta < -Math.PI) delta += Math.PI * 2;
+          const rotLerp = 1 - Math.exp(-dt * 4);
+          this.cockpitCamRotation += delta * rotLerp;
+        }
+        cam.setRotation(this.cockpitCamRotation);
+        return;
+      }
       const lookK = 0.35;
       const lookMax = 220;
       const lookX = Phaser.Math.Clamp(this.player.vx * lookK, -lookMax, lookMax);
@@ -1175,14 +1206,24 @@ export class RaceScene extends Phaser.Scene {
     return r * maxOff;
   }
 
+  // One pickup roughly every PICKUP_SPACING units of track, clamped to [PICKUP_MIN, PICKUP_MAX].
+  // Stadium with a fixed 8 felt overcrowded because the pickups bunch into the same corridor band
+  // on its short connecting arcs; scaling with arc length keeps density consistent across tracks.
+  private pickupCountForTrack(): number {
+    const PICKUP_SPACING = 700;
+    const PICKUP_MIN = 4;
+    const PICKUP_MAX = 12;
+    const cum = this.track.centerlineCumS;
+    const total = cum.length > 0 ? cum[cum.length - 1] : 0;
+    if (total <= 0) return PICKUP_MIN;
+    return Phaser.Math.Clamp(Math.round(total / PICKUP_SPACING), PICKUP_MIN, PICKUP_MAX);
+  }
+
   private spawnPickups(count: number) {
-    const pts = this.track.centerline;
-    const step = Math.floor(pts.length / count);
-    const offset = Math.floor(step / 2);
     for (let i = 0; i < count; i++) {
-      const p = pts[(i * step + offset) % pts.length];
-      const sprite = this.add.sprite(p.x, p.y, "pickup").setDepth(5);
-      this.pickups.push({ sprite, active: true, respawnAt: 0, baseX: p.x, baseY: p.y });
+      const sprite = this.add.sprite(0, 0, "pickup").setDepth(5);
+      const pickup: Pickup = { sprite, active: true, respawnAt: 0 };
+      this.pickups.push(pickup);
       this.tweens.add({
         targets: sprite,
         scale: { from: 0.9, to: 1.15 },
@@ -1190,7 +1231,46 @@ export class RaceScene extends Phaser.Scene {
         repeat: -1,
         duration: 600,
       });
+      // Initial position: random spot in the inner-50% lateral corridor.
+      this.relocatePickup(pickup);
     }
+  }
+
+  // Picks a fresh random spot for the pickup: any centerline point, lateral offset uniform in
+  // ±width/4 (so the inner half of the asphalt — the outer 25% on each side is excluded). Tries a
+  // few times to avoid landing on top of another active pickup; gives up after 8 attempts and
+  // accepts whatever it has.
+  private relocatePickup(p: Pickup) {
+    const pts = this.track.centerline;
+    const n = pts.length;
+    const halfRange = this.track.width / 4;
+    const minSep = 80;
+    let chosenX = 0;
+    let chosenY = 0;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const idx = Math.floor(Math.random() * n);
+      const a = pts[idx];
+      const b = pts[(idx + 1) % n];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len;
+      const ny = dx / len;
+      const lat = (Math.random() * 2 - 1) * halfRange;
+      chosenX = a.x + nx * lat;
+      chosenY = a.y + ny * lat;
+      let collision = false;
+      for (const other of this.pickups) {
+        if (other === p) continue;
+        if (!other.active) continue;
+        if (Phaser.Math.Distance.Between(other.sprite.x, other.sprite.y, chosenX, chosenY) < minSep) {
+          collision = true;
+          break;
+        }
+      }
+      if (!collision) break;
+    }
+    p.sprite.setPosition(chosenX, chosenY);
   }
 
   private updatePickups() {
@@ -1198,13 +1278,16 @@ export class RaceScene extends Phaser.Scene {
     for (const p of this.pickups) {
       if (!p.active) {
         if (now >= p.respawnAt) {
+          // Pick a fresh random location each respawn so item placement varies across the race
+          // rather than circling back to the same 8 spots.
+          this.relocatePickup(p);
           p.active = true;
           p.sprite.setVisible(true);
         }
         continue;
       }
       for (const c of this.cars) {
-        if (Phaser.Math.Distance.Between(c.x, c.y, p.baseX, p.baseY) < 22) {
+        if (Phaser.Math.Distance.Between(c.x, c.y, p.sprite.x, p.sprite.y) < 22) {
           if (!c.itemSlot) {
             c.itemSlot = randomItem();
             if (!c.isPlayer) {
@@ -1213,10 +1296,10 @@ export class RaceScene extends Phaser.Scene {
           }
           p.active = false;
           p.sprite.setVisible(false);
-          p.respawnAt = now + 3500;
+          p.respawnAt = now + 1750;
           // Only humans trigger the chime — AI pickups are silent. The chime is feedback
           // for the player who grabbed the box, not a positional cue about distant traffic.
-          if (this.audioBus && c.isPlayer) playPickupChime(this.audioBus, p.baseX, p.baseY);
+          if (this.audioBus && c.isPlayer) playPickupChime(this.audioBus, p.sprite.x, p.sprite.y);
           break;
         }
       }

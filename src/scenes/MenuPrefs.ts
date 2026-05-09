@@ -24,6 +24,9 @@ export interface MenuPrefs {
   laps: number;
   opponents: number;
   players: PlayerCount;
+  // 1P-only camera mode. When true, the world rotates so player heading is always up.
+  // Forced false in 2P (split-screen would need its own design).
+  cockpitCam: boolean;
 }
 
 const STORAGE_KEY = "f1re.menu.prefs";
@@ -39,6 +42,7 @@ export function defaultMenuPrefs(): MenuPrefs {
     laps: 3,
     opponents: 5,
     players: 1,
+    cockpitCam: false,
   };
 }
 
@@ -57,6 +61,7 @@ export function loadMenuPrefs(): MenuPrefs {
       laps: clampInt(parsed?.laps, LAPS_MIN, LAPS_MAX, defaults.laps),
       opponents: clampInt(parsed?.opponents, OPPONENTS_MIN, OPPONENTS_MAX, defaults.opponents),
       players: parsePlayers(parsed?.players, defaults.players),
+      cockpitCam: typeof parsed?.cockpitCam === "boolean" ? parsed.cockpitCam : defaults.cockpitCam,
     };
   } catch {
     return defaults;

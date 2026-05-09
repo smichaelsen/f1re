@@ -63,6 +63,15 @@ Everything outside the track + physics + items: the framing, the HUD, the menus,
 - **Audio.** Both humans are registered as bus listeners; each source's gain is averaged 50/50 across them (`AudioBus.setListeners`). A sound right next to one player still drops to ~0.5 in 2P — intentional, so neither player loses spatial awareness when the field splits.
 - **Open question.** P1/P2 humans share their team's livery; the position panel reads e.g. `P3 P1 L2` which is mildly confusing because the position prefix and the player name both lead with "P". Could rename humans to `Y1`/`Y2` or use the team short code if it gets reported as a problem.
 
+### Cockpit camera (1P-only, opt-in via settings)
+- Settings row "CAMERA (1P ONLY)" with TOP-DOWN / COCKPIT toggle (`MenuScene.makeCockpitCamPicker`). Visible only when `players === 1`. Persisted in `MenuPrefs.cockpitCam` (default false).
+- When enabled and `humans.length === 1`, `RaceScene.updateRaceCamera` skips the look-ahead `setFollowOffset` path and instead lerps `cam.setRotation` toward `-player.heading - π/2` so the player's heading always points up on screen. `cam.startFollow` still keeps the player centered; only rotation is custom.
+- Lerp coefficient `dt * 4` (~0.25s time constant). Rubber-band feel was tuned away from `dt * 8` (felt nausea-inducing) and `dt * 3` (felt sluggish).
+- **Spin disconnect.** While `player.spinTimer > 0` the rotation update is skipped — the camera holds its last pre-spin angle so missile/oil hits visibly spin the *car* on screen instead of dragging the world along. The lerp re-acquires the new heading on recovery.
+- **Grid alignment.** `RaceScene.create` writes the rotation to its target value before the countdown so the player sees the world already aligned during "3 / 2 / 1 / GO".
+- 2P forces `cockpitCam = false` even if the pref is on (gated in `RaceScene.init` and the `start()` payload). Split-screen rotated cameras are a follow-up design problem.
+- HUD lives on `uiCam` so it stays screen-locked. Particles, skid marks, and runtime-spawned world graphics all live on the main camera and rotate with the scene.
+
 ### Camera polish (race)
 - World camera zoom dropped from 0.9 → 0.85 for a wider preview of the upcoming track.
 - Velocity look-ahead via `cameras.main.setFollowOffset(-vx*k, -vy*k)` per racing frame, with `k = 0.35` and a `±220` clamp so spin doesn't whip the camera. Phaser's existing 0.12 lerp on `startFollow` smooths the offset transition.
