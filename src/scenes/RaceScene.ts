@@ -1093,8 +1093,36 @@ export class RaceScene extends Phaser.Scene {
   private aiInput(ai: Car): CarInput {
     const bestIdx = this.closestCenterlineIdx(ai);
     const speed = ai.speed;
-    const target = this.aimAtRacingLine(ai, bestIdx);
-    const desiredAng = Math.atan2(target.y - ai.y, target.x - ai.x);
+
+    let asphaltCorners = 0;
+    for (const c of ai.corners()) {
+      if (this.track.surfaceAt(c.x, c.y) === "asphalt") asphaltCorners++;
+    }
+
+    // Off-track recovery: with 3+ wheels off the asphalt, abandon the racing line and
+    // aim at the bisector of (track-tangent forward, perpendicular-toward-centerline) —
+    // a 45° forward-angled rejoin. Switches back to the normal waypoint aim once at
+    // least 2 wheels are back on asphalt.
+    let desiredAng: number;
+    if (asphaltCorners < 2) {
+      const probe = this.track.probe(ai.x, ai.y);
+      const pts = this.track.centerline;
+      const n = pts.length;
+      const a = pts[probe.index];
+      const b = pts[(probe.index + 1) % n];
+      const tdx = b.x - a.x;
+      const tdy = b.y - a.y;
+      const tlen = Math.hypot(tdx, tdy) || 1;
+      const fx = tdx / tlen;
+      const fy = tdy / tlen;
+      // probe.nx,ny points centerline→car; negate for car→centerline (inward).
+      const ax = fx - probe.nx;
+      const ay = fy - probe.ny;
+      desiredAng = Math.atan2(ay, ax);
+    } else {
+      const target = this.aimAtRacingLine(ai, bestIdx);
+      desiredAng = Math.atan2(target.y - ai.y, target.x - ai.x);
+    }
     const diff = Phaser.Math.Angle.Wrap(desiredAng - ai.heading);
     const steer = Phaser.Math.Clamp(diff * 1.8, -1, 1);
 
