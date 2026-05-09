@@ -46,6 +46,9 @@ interface RaceInit {
   // 1P-only: rotate the world so player heading is always up. Ignored in 2P (split-screen camera
   // owns its own framing).
   cockpitCam?: boolean;
+  // Player display names (≤8 chars). Default to "PLAYER 1" / "PLAYER 2" upstream.
+  name1?: string;
+  name2?: string;
 }
 const ITEMS = ["boost", "missile", "seeker", "oil", "shield"] as const;
 type Item = (typeof ITEMS)[number];
@@ -212,6 +215,8 @@ export class RaceScene extends Phaser.Scene {
   // Per-player input source. inputSources[i] resolves the controls for humans[i].
   // null entries fall back to defaults (1P auto, 2P legacy keyboard schemes).
   inputSources: (InputSource | null)[] = [];
+  // Sanitised display names for the human players (already clamped/uppercased upstream).
+  playerNames: string[] = ["PLAYER 1", "PLAYER 2"];
   inputReader!: InputReader;
   // Per-player DRS auto/manual mode. Index 0 = P1, 1 = P2. AI cars always use auto.
   drsModes: DrsModes = defaultDrsModes();
@@ -243,6 +248,10 @@ export class RaceScene extends Phaser.Scene {
     this.drsModes = data.drsModes ?? loadDrsModes();
     // 2P always uses fit-to-both framing; cockpit-cam is a 1P-only experiment for now.
     this.cockpitCam = (data.cockpitCam ?? false) && this.playerCount === 1;
+    this.playerNames = [
+      cleanPlayerName(data.name1, "PLAYER 1"),
+      cleanPlayerName(data.name2, "PLAYER 2"),
+    ];
   }
 
   preload() {
@@ -297,7 +306,7 @@ export class RaceScene extends Phaser.Scene {
         secondary: team.secondary,
         variant: randomVariant(Math.random),
       };
-      const name = this.playerCount === 1 ? "YOU" : `P${i + 1}`;
+      const name = this.playerNames[i] ?? `PLAYER ${i + 1}`;
       const car = new Car(this, slot.x, slot.y, ensureCarTexture(this, livery), name, true);
       car.heading = slot.heading;
       car.playerIndex = i;
@@ -329,7 +338,8 @@ export class RaceScene extends Phaser.Scene {
       };
       const seen = (teamCounts.get(team.id) ?? 0) + 1;
       teamCounts.set(team.id, seen);
-      const aiName = seen === 1 ? team.short : `${team.short}${seen}`;
+      // Two driver names per team, one per car slot; aiTeamPool ensures `seen` is 1 or 2.
+      const aiName = team.drivers[Phaser.Math.Clamp(seen - 1, 0, team.drivers.length - 1)];
       const [pLow, pHigh] = params.perfRange;
       const [sLow, sHigh] = params.skillRange;
       const aiCar = new Car(this, slot.x, slot.y, ensureCarTexture(this, livery), aiName, false, {
@@ -1807,7 +1817,7 @@ export class RaceScene extends Phaser.Scene {
       }
 
       const tag = isPlayer ? " ◂ YOU" : "";
-      const nameCol = car.name.padEnd(4);
+      const nameCol = car.name.padEnd(8);
 
       if (compact) {
         const timeColPadded = timeCol.padEnd(10);
@@ -1868,6 +1878,13 @@ export class RaceScene extends Phaser.Scene {
     this.hud.update(multi);
     this.hud2?.update(multi);
   }
+}
+
+// Match MenuPrefs.sanitizeName: uppercase, strip non [A-Z0-9 ], cap at 8 chars; fall back when empty.
+function cleanPlayerName(raw: unknown, fallback: string): string {
+  if (typeof raw !== "string") return fallback;
+  const cleaned = raw.toUpperCase().replace(/[^A-Z0-9 ]/g, "").slice(0, 8);
+  return cleaned.length > 0 ? cleaned : fallback;
 }
 
 function randomItem(): Item {
