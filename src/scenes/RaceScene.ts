@@ -49,6 +49,8 @@ interface RaceInit {
 }
 const ITEMS = ["boost", "missile", "seeker", "oil", "shield"] as const;
 type Item = (typeof ITEMS)[number];
+// Per-car inventory capacity (FIFO). Pickups roll past full cars rather than overflowing.
+const ITEM_INVENTORY_SIZE = 2;
 
 type RaceState = "countdown" | "racing" | "finished";
 
@@ -860,7 +862,7 @@ export class RaceScene extends Phaser.Scene {
       ai.audioThrottle = input.throttle;
       ai.update(dt, input, this.surfaceFeel(ai));
       this.applyTrackBounds(ai);
-      if (aiActive && ai.itemSlot && ai.useItemAt != null && now >= ai.useItemAt) {
+      if (aiActive && ai.items.length > 0 && ai.useItemAt != null && now >= ai.useItemAt) {
         this.useItem(ai);
       }
       if (aiActive) this.updateDrsForCar(ai, input, now);
@@ -1288,11 +1290,14 @@ export class RaceScene extends Phaser.Scene {
       }
       for (const c of this.cars) {
         if (Phaser.Math.Distance.Between(c.x, c.y, p.sprite.x, p.sprite.y) < 22) {
-          if (!c.itemSlot) {
-            c.itemSlot = randomItem();
-            if (!c.isPlayer) {
-              c.useItemAt = now + Phaser.Math.Between(1000, 5000);
-            }
+          // Inventory cap. Cars at capacity skip the box (it stays active so others can grab it).
+          if (c.items.length >= ITEM_INVENTORY_SIZE) continue;
+          c.items.push(randomItem());
+          // AI scheduling: only set a fresh delay when the car was empty and is now non-empty.
+          // While items remain in inventory, useItem() schedules the next firing on consume so
+          // a fresh pickup mid-queue doesn't reset the existing timer.
+          if (!c.isPlayer && c.useItemAt == null) {
+            c.useItemAt = now + Phaser.Math.Between(1000, 5000);
           }
           p.active = false;
           p.sprite.setVisible(false);
@@ -1307,10 +1312,14 @@ export class RaceScene extends Phaser.Scene {
   }
 
   private useItem(car: Car) {
-    if (!car.itemSlot) return;
-    const item = car.itemSlot as Item;
-    car.itemSlot = null;
+    if (car.items.length === 0) return;
+    const item = car.items.shift() as Item;
     car.useItemAt = null;
+    // If this AI still holds queued items, schedule the next one. Player consumption is driven
+    // by the use-item input edge, not a timer.
+    if (!car.isPlayer && car.items.length > 0) {
+      car.useItemAt = this.time.now + Phaser.Math.Between(1000, 5000);
+    }
     const bus = this.audioBus;
     switch (item) {
       case "boost":
@@ -1427,7 +1436,7 @@ export class RaceScene extends Phaser.Scene {
   }
 
   private fireSeeker(owner: Car) {
-    const speed = 520;
+    const speed = 700;
     const cl = this.track.centerline;
     const n = cl.length;
     if (n < 2) return;
@@ -1467,7 +1476,7 @@ export class RaceScene extends Phaser.Scene {
       vx: (tdx / tlen) * speed,
       vy: (tdy / tlen) * speed,
       owner,
-      expiresAt: this.time.now + 6000,
+      expiresAt: this.time.now + 9000,
       nodeIdx,
     });
   }
@@ -1476,7 +1485,7 @@ export class RaceScene extends Phaser.Scene {
     const now = this.time.now;
     const cl = this.track.centerline;
     const n = cl.length;
-    const speed = 520;
+    const speed = 700;
     const lockRadius = 140;
     const advanceR2 = 144; // 12 px node-arrival threshold
 
@@ -1817,7 +1826,7 @@ export class RaceScene extends Phaser.Scene {
       s.hud.setLap(s.car.lap + 1, this.totalLaps);
       s.hud.setTime(elapsed);
       s.hud.setBest(s.car.bestLapMs);
-      s.hud.setItem(s.car.itemSlot, s.useKey);
+      s.hud.setItem(s.car.items, s.useKey);
       const manual = this.modeForCar(s.car) === "manual";
       const drsState = s.car.drsActive
         ? "active"

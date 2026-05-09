@@ -1,4 +1,5 @@
 import Phaser from "phaser";
+import { createItemIcon, redrawItemIcon } from "./ItemIcon";
 
 export interface PositionRow {
   pos: number;
@@ -9,6 +10,21 @@ export interface PositionRow {
 }
 
 export type HudSide = "left" | "right";
+
+const PRIMARY_ICON_SIZE = 40;
+const SECONDARY_SCALE = 0.62;
+const SLOT_PADDING = 6;
+const PRIMARY_SLOT_SIZE = PRIMARY_ICON_SIZE + SLOT_PADDING * 2;
+const SECONDARY_SLOT_SIZE = Math.round(PRIMARY_SLOT_SIZE * SECONDARY_SCALE);
+const SLOT_CORNER_RADIUS = 6;
+const SLOT_FILL = 0x111111;
+const SLOT_FILL_ALPHA = 0.45;
+const SLOT_STROKE = 0xffffff;
+const SLOT_STROKE_ALPHA = 0.25;
+// Secondary slot offset from the primary's center. Negative X = to the upper-left of the
+// primary (so secondary visibly pokes out instead of being almost fully obscured).
+const SECONDARY_OFFSET_X = -26;
+const SECONDARY_OFFSET_Y = -20;
 
 /**
  * Per-player HUD slot. In 1P mode there is exactly one Hud (`side: 'left'`) and it owns
@@ -23,7 +39,16 @@ export class Hud {
   lapText: Phaser.GameObjects.Text;
   timeText: Phaser.GameObjects.Text;
   bestText: Phaser.GameObjects.Text;
-  itemText: Phaser.GameObjects.Text;
+  // Inventory: two slot boxes. Primary (front-of-queue, big), secondary (next-up, smaller and
+  // offset back-left). The slot backgrounds are always visible so empty inventory still reads as
+  // "two slots". `currentItems` is the item-key list the icons currently render; we only redraw
+  // on change.
+  itemPrimaryBg: Phaser.GameObjects.Graphics;
+  itemSecondaryBg: Phaser.GameObjects.Graphics;
+  itemPrimary: Phaser.GameObjects.Container;
+  itemSecondary: Phaser.GameObjects.Container;
+  itemHint: Phaser.GameObjects.Text;
+  currentItems: string[] = [];
   drsText: Phaser.GameObjects.Text;
   msgText: Phaser.GameObjects.Text;
   // Session-wide broadcast slot (FASTEST LAP, DRS ENABLED). Lives only on the 'left' HUD so it
@@ -58,8 +83,25 @@ export class Hud {
     this.lapText = scene.add.text(startX, 50, "", style).setOrigin(anchorX, 0).setScrollFactor(0).setDepth(1000);
     this.timeText = scene.add.text(startX, 80, "", style).setOrigin(anchorX, 0).setScrollFactor(0).setDepth(1000);
     this.bestText = scene.add.text(startX, 110, "", style).setOrigin(anchorX, 0).setScrollFactor(0).setDepth(1000);
-    this.itemText = scene.add
-      .text(startX, 140, "", { ...style, color: "#ffd24a" })
+    // Inventory boxes + icons. Depth ordering bottom-to-top so the primary slot occludes the
+    // secondary's overlap region: secondary bg (999) → secondary icon (1000) → primary bg
+    // (1000.5) → primary icon (1001). Backgrounds always visible so empty slots still read.
+    this.itemSecondaryBg = drawSlotBg(scene, SECONDARY_SLOT_SIZE)
+      .setScrollFactor(0)
+      .setDepth(999);
+    this.itemSecondary = createItemIcon(scene, "boost", PRIMARY_ICON_SIZE * SECONDARY_SCALE)
+      .setScrollFactor(0)
+      .setDepth(1000)
+      .setVisible(false);
+    this.itemPrimaryBg = drawSlotBg(scene, PRIMARY_SLOT_SIZE)
+      .setScrollFactor(0)
+      .setDepth(1000.5);
+    this.itemPrimary = createItemIcon(scene, "boost", PRIMARY_ICON_SIZE)
+      .setScrollFactor(0)
+      .setDepth(1001)
+      .setVisible(false);
+    this.itemHint = scene.add
+      .text(startX, 140, "", { ...style, fontSize: "14px", color: "#888888" })
       .setOrigin(anchorX, 0)
       .setScrollFactor(0)
       .setDepth(1000);
@@ -80,7 +122,11 @@ export class Hud {
       this.lapText,
       this.timeText,
       this.bestText,
-      this.itemText,
+      this.itemSecondaryBg,
+      this.itemSecondary,
+      this.itemPrimaryBg,
+      this.itemPrimary,
+      this.itemHint,
       this.drsText,
       this.msgText,
     ];
@@ -149,8 +195,44 @@ export class Hud {
   setBest(ms: number | null) {
     this.bestText.setText(`BEST ${ms == null ? "—" : formatMs(ms)}`);
   }
-  setItem(item: string | null, useKey: string = "SPACE") {
-    this.itemText.setText(item ? `ITEM [${item.toUpperCase()}]  ${useKey} to use` : "");
+  // Place the primary + secondary icons + the use-key hint. Side-aware: on the right HUD the
+  // secondary tucks toward the right edge so the layout still reads "behind, off-screen-side".
+  // Inventory is centered horizontally inside the player's screen region:
+  //  - 1P: cam.width / 2
+  //  - 2P left: cam.width / 4
+  //  - 2P right: 3 * cam.width / 4
+  // The hint label centers under the primary slot.
+  private positionItemIcons(multiplayer: boolean) {
+    const cam = this.scene.cameras.main;
+    const baseY = 110;
+    const isLeft = this.side === "left";
+    const px = !multiplayer
+      ? cam.width / 2
+      : isLeft
+        ? cam.width / 4
+        : (cam.width * 3) / 4;
+    this.itemPrimaryBg.setPosition(px, baseY);
+    this.itemPrimary.setPosition(px, baseY);
+    this.itemSecondaryBg.setPosition(px + SECONDARY_OFFSET_X, baseY + SECONDARY_OFFSET_Y);
+    this.itemSecondary.setPosition(px + SECONDARY_OFFSET_X, baseY + SECONDARY_OFFSET_Y);
+    this.itemHint.setPosition(px, baseY + PRIMARY_SLOT_SIZE / 2 + 6).setOrigin(0.5, 0);
+  }
+
+  setItem(items: string[], useKey: string = "SPACE") {
+    // Diff against the previously rendered list; only redraw when content changes. Position is
+    // re-applied every frame in update() because the HUD anchors flip on resize / 2P layout.
+    const primary = items[0] ?? null;
+    const secondary = items[1] ?? null;
+    if (primary !== (this.currentItems[0] ?? null)) {
+      if (primary) redrawItemIcon(this.itemPrimary, primary, PRIMARY_ICON_SIZE);
+      this.itemPrimary.setVisible(primary != null);
+    }
+    if (secondary !== (this.currentItems[1] ?? null)) {
+      if (secondary) redrawItemIcon(this.itemSecondary, secondary, PRIMARY_ICON_SIZE * SECONDARY_SCALE);
+      this.itemSecondary.setVisible(secondary != null);
+    }
+    this.currentItems = items.slice();
+    this.itemHint.setText(primary ? `${useKey} to use` : "");
   }
   setDrs(state: "off" | "available" | "active", drsKey: string = "RSHIFT") {
     if (state === "off") {
@@ -226,25 +308,25 @@ export class Hud {
       this.lapText.setPosition(20, 50);
       this.timeText.setPosition(20, 80);
       this.bestText.setPosition(20, 110);
-      this.itemText.setPosition(20, 140);
-      this.drsText.setPosition(20, 170);
+      this.drsText.setPosition(20, 235);
     } else {
       const x = cam.width - 20;
       this.speedText.setPosition(x, 20);
       this.lapText.setPosition(x, 50);
       this.timeText.setPosition(x, 80);
       this.bestText.setPosition(x, 110);
-      this.itemText.setPosition(x, 140);
-      this.drsText.setPosition(x, 170);
+      this.drsText.setPosition(x, 235);
     }
+    this.positionItemIcons(multiplayer);
 
-    // Per-side flash position: P1 just left of center, P2 just right of center.
-    // In 1P mode we keep msgText centered (existing behaviour).
+    // Per-side flash position: P1 just left of center, P2 just right of center. Sits below the
+    // top-centered inventory in 1P (y=180) so a BOOST!/MISSILE! flash doesn't render on top of
+    // the icons.
     if (multiplayer) {
       const offset = isLeft ? -160 : 160;
-      this.msgText.setPosition(cam.width / 2 + offset, 100);
+      this.msgText.setPosition(cam.width / 2 + offset, 180);
     } else {
-      this.msgText.setPosition(cam.width / 2, 100);
+      this.msgText.setPosition(cam.width / 2, 180);
     }
 
     if (this.countdownText) {
@@ -308,6 +390,16 @@ export class Hud {
       this.broadcastText.setText("");
     }
   }
+}
+
+function drawSlotBg(scene: Phaser.Scene, size: number): Phaser.GameObjects.Graphics {
+  const g = scene.add.graphics();
+  // Centered rounded rect so the same `setPosition(x, y)` works for both bg and icon.
+  g.fillStyle(SLOT_FILL, SLOT_FILL_ALPHA);
+  g.fillRoundedRect(-size / 2, -size / 2, size, size, SLOT_CORNER_RADIUS);
+  g.lineStyle(2, SLOT_STROKE, SLOT_STROKE_ALPHA);
+  g.strokeRoundedRect(-size / 2, -size / 2, size, size, SLOT_CORNER_RADIUS);
+  return g;
 }
 
 function formatMs(ms: number): string {
