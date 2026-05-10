@@ -42,6 +42,10 @@ const BASE_GRIP = 4.0;
 const GRIP_RECOVERY_SEC = 1.0;
 
 export const SHIELD_COLOR = 0x88ccff;
+// Shield lifetime. After SHIELD_DURATION_MS the shield expires unused; in the last
+// SHIELD_BLINK_WINDOW_MS the ring blinks twice (4 phases × ~375ms) as an expiry tell.
+export const SHIELD_DURATION_MS = 15000;
+export const SHIELD_BLINK_WINDOW_MS = 1500;
 
 // DRS effect strengths. Top-speed gets a small bump and drag is shaved on top of the
 // surface-driven drag. Both stack with item boost; AI uses the same numbers. Tuned subtle —
@@ -61,6 +65,7 @@ export class Car {
   boostTimer = 0;
   spinTimer = 0;
   shielded = false;
+  shieldExpiresAt = 0;
   // Slipstream multiplier applied to accel + max speed. 1.0 = no draft. Set per-frame by RaceScene.
   draft = 1.0;
   // Throttle the audio layer should treat as "commanded right now". Set by RaceScene
@@ -226,8 +231,23 @@ export class Car {
       if (g.visible) g.setVisible(false);
       return;
     }
-    if (!g.visible) g.setVisible(true);
     const now = this.scene.time.now;
+    const remaining = this.shieldExpiresAt - now;
+    if (this.shieldExpiresAt > 0 && remaining <= 0) {
+      this.shielded = false;
+      this.shieldExpiresAt = 0;
+      if (g.visible) g.setVisible(false);
+      return;
+    }
+    // Blink twice in the final SHIELD_BLINK_WINDOW_MS: 4 phases (on/off/on/off).
+    if (this.shieldExpiresAt > 0 && remaining <= SHIELD_BLINK_WINDOW_MS) {
+      const phase = Math.floor(((SHIELD_BLINK_WINDOW_MS - remaining) / SHIELD_BLINK_WINDOW_MS) * 4);
+      if (phase % 2 === 1) {
+        if (g.visible) g.setVisible(false);
+        return;
+      }
+    }
+    if (!g.visible) g.setVisible(true);
     const pulse = 0.45 + 0.4 * (0.5 + 0.5 * Math.sin(now / 180));
     g.clear();
     g.lineStyle(3, SHIELD_COLOR, pulse);
@@ -250,6 +270,7 @@ export class Car {
   spin(seconds = 1.0): boolean {
     if (this.shielded) {
       this.shielded = false;
+      this.shieldExpiresAt = 0;
       return false;
     }
     this.spinTimer = seconds;

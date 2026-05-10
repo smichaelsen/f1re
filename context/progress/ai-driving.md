@@ -21,9 +21,10 @@ How the AI cars drive.
 - Racing line is *geometric* (minimum curvature). A late-apex shaping pass was tried and reverted (cost lap time — see Architecture Decisions). Could revisit if a track has corners where geometric min-curv looks visibly wrong; hints are the escape hatch.
 - Hint indices are tied to centerline point indices and shift if `gen-tracks.mjs` regenerates the centerline. Hand-authored tracks (current state) — not a problem yet.
 - On continuously curved tracks (e.g., Oval), the geometric line collapses toward the inside wall along the entire loop. Expected behaviour but may want a per-track override mechanism for "minimum offset deviation" if it looks bad.
-- AI uses items on a random 1–5s delay after pickup, not based on tactical opportunity.
+
+## Item Awareness (shipped)
+AI now evaluates each item via a per-item utility check with skill-jittered judgement values (range estimates, perceived bearings, gate thresholds). Noise is sampled once at pickup (frozen per item-instance) and scaled quadratically by `(1 - skill)²` so only the bottom of the skill range visibly fumbles. Patience cap of 8s force-fires hoarded items. Detail in `progress/items.md` under "AI item intelligence".
 
 ## Next Up
 - Skill should modulate brake-point timing/jitter (lower-skill AI brakes later or with noisier `AI_LATERAL_GRIP_LIMIT`).
-- Item awareness (use boost on straights, missile when there's a clear target ahead).
 - Tune `AI_LATERAL_GRIP_LIMIT` per surface — current value assumes asphalt. Off-track AI keeps the same target speed even though grip is lower.
