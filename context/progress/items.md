@@ -5,12 +5,17 @@
 ### Pickup boxes
 - 8 pickups per track, 3.5s respawn after collection.
 - Player triggers items via SPACE; AI triggers on a random 1–5s delay after pickup.
-- Spinning AI keeps its `useItemAt` timer; `useItem` clears both `itemSlot` and `useItemAt`.
+- Spinning AI keeps its `useItemAt` timer; `useItem` shifts the front item off the queue and clears `useItemAt`.
+
+### Inventory (FIFO, 2 slots)
+- `Car.items: string[]` — oldest at index 0, newest at the end. Capacity `ITEM_INVENTORY_SIZE = 2` enforced at pickup time. Cars at capacity skip the box (it stays active for others).
+- `useItem(car)` shifts the front item (`items.shift()`) and fires its effect. AI scheduling: pickup sets `useItemAt` only when the AI was empty; `useItem` reschedules a fresh 1–5s timer if items remain in the queue, so AI doesn't fire its whole inventory on the same frame.
+- HUD shows the queue as two slot boxes (rounded rects, dark fill, faint white stroke). Front-of-queue ("about to use") icon rendered big inside the primary slot; next item rendered smaller in the secondary slot offset up-left so it reads as "behind it". The empty boxes always render so capacity reads even when the inventory is empty. Both icons use the in-world appearance for each item (red+orange dot for missile, cyan+white for seeker, black blob for oil, cyan ring for shield, double-chevron for boost since it has no in-world sprite). Helpers in `src/ui/ItemIcon.ts`; slot bg drawn by `drawSlotBg` in `Hud.ts`; the diff-and-redraw is in `Hud.setItem`. Depth ordering bottom→top: secondary bg → secondary icon → primary bg → primary icon, so the primary slot occludes the secondary's overlap region. DRS HUD line moved from y=170 to y=235 to clear the icon stack.
 
 ### Items
 - **Boost** — 1.6× speed for 2s.
 - **Missile** — homing, locks on enemies in 220-unit radius.
-- **Seeker** — spawns 24px ahead on the centerline, follows the racing line at 520u/s until any non-owner enters a 140-unit lock radius, then homes in (one-way transition, same 4.5 rad/s turn cap as missile). 6s lifetime. Visual: cyan core + white halo. Same hit effect as missile (spin 1.2, shield-aware).
+- **Seeker** — spawns 24px ahead on the centerline, follows the racing line at 700u/s until any non-owner enters a 140-unit lock radius, then homes in (one-way transition, same 4.5 rad/s turn cap as missile). 9s lifetime. Visual: cyan core + white halo. Same hit effect as missile (spin 1.2, shield-aware).
 - **Oil slick** — drop behind, spins anyone who hits it.
 - **Shield** — consumes one incoming hit.
 

@@ -14,7 +14,15 @@ import {
   type InputSource,
 } from "../input/InputSource";
 import { loadDrsModes, saveDrsModes, type DrsMode, type DrsModes } from "../input/DrsMode";
-import { loadMenuPrefs, saveMenuPrefs } from "./MenuPrefs";
+import { TextInput } from "../ui/TextInput";
+import {
+  DEFAULT_NAME_1,
+  DEFAULT_NAME_2,
+  NAME_MAX_LENGTH,
+  loadMenuPrefs,
+  sanitizeName,
+  saveMenuPrefs,
+} from "./MenuPrefs";
 
 export type TrackKey = "oval" | "stadium" | "temple-of-speed" | "champions-wall";
 export type Difficulty = "easy" | "normal" | "hard";
@@ -60,6 +68,13 @@ interface DrsModeButtons {
   buttons: { mode: DrsMode; bg: Phaser.GameObjects.Rectangle; label: Phaser.GameObjects.Text }[];
 }
 
+type CamMode = "fixed" | "cockpit";
+const CAM_MODE_OPTIONS: CamMode[] = ["fixed", "cockpit"];
+interface CamModeButtons {
+  label: Phaser.GameObjects.Text;
+  buttons: { mode: CamMode; bg: Phaser.GameObjects.Rectangle; label: Phaser.GameObjects.Text }[];
+}
+
 export const TRACK_KEYS: TrackKey[] = TRACKS.map((t) => t.key);
 
 interface CounterButtons {
@@ -84,7 +99,7 @@ const INPUT_DEBUG_ROWS = 4;
 
 type View = "main" | "settings";
 
-const CONTENT_HEIGHT = 1080;
+const CONTENT_HEIGHT = 1030;
 
 export class MenuScene extends Phaser.Scene {
   selectedTeam: TeamId = DEFAULT_TEAM_ID;
@@ -96,6 +111,9 @@ export class MenuScene extends Phaser.Scene {
   laps: number = 3;
   opponents: number = 5;
   players: PlayerCount = 1;
+  cockpitCam: boolean = false;
+  name1: string = DEFAULT_NAME_1;
+  name2: string = DEFAULT_NAME_2;
 
   view: View = "main";
   mainObjects: Phaser.GameObjects.GameObject[] = [];
@@ -126,6 +144,13 @@ export class MenuScene extends Phaser.Scene {
   drsModes: DrsModes = loadDrsModes();
   drsModeP1: DrsModeButtons | null = null;
   drsModeP2: DrsModeButtons | null = null;
+  cockpitCamButtons: CamModeButtons | null = null;
+  // Player-name inputs. P2 only visible when players===2 and view==='settings'. The label objects
+  // are tracked separately so we can repaint them ("NAME" vs "P1 NAME" vs hidden).
+  nameInput1: TextInput | null = null;
+  nameInput2: TextInput | null = null;
+  nameLabel1: Phaser.GameObjects.Text | null = null;
+  nameLabel2: Phaser.GameObjects.Text | null = null;
   // Debug panel: list of connected pads with live trigger/stick values + which slot they're bound to.
   padDebugTitle!: Phaser.GameObjects.Text;
   padDebugRows: Phaser.GameObjects.Text[] = [];
@@ -153,6 +178,9 @@ export class MenuScene extends Phaser.Scene {
     this.laps = prefs.laps;
     this.opponents = prefs.opponents;
     this.players = prefs.players;
+    this.cockpitCam = prefs.cockpitCam;
+    this.name1 = prefs.name1;
+    this.name2 = prefs.name2;
 
     const cam = this.cameras.main;
     const cx = cam.width / 2;
@@ -168,7 +196,7 @@ export class MenuScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     this.add
-      .text(cx, 150, "2D Racing Fury", {
+      .text(cx, 150, this.pickSubtitle(), {
         fontFamily: "system-ui, sans-serif",
         fontSize: "20px",
         color: "#aaaaaa",
@@ -199,14 +227,38 @@ export class MenuScene extends Phaser.Scene {
       );
     });
 
+    // Name inputs intercept keystrokes; gate the menu hotkeys so typing "ENTER" in a name field
+    // doesn't also start the race. Also routes other characters into the focused input.
+    this.input.keyboard?.on("keydown", (e: KeyboardEvent) => {
+      if (this.nameInput1?.handleKey(e)) {
+        e.preventDefault?.();
+        return;
+      }
+      if (this.nameInput2?.handleKey(e)) {
+        e.preventDefault?.();
+        return;
+      }
+    });
     this.input.keyboard?.on("keydown-ENTER", () => {
+      if (this.isAnyNameInputFocused()) return;
       if (this.view === "main") this.start();
     });
     this.input.keyboard?.on("keydown-SPACE", () => {
+      if (this.isAnyNameInputFocused()) return;
       if (this.view === "main") this.start();
     });
     this.input.keyboard?.on("keydown-ESC", () => {
+      if (this.isAnyNameInputFocused()) return;
       if (this.view === "settings") this.setView("main");
+    });
+
+    // Click outside a focused input → blur (commits the value via the TextInput's own blur path).
+    this.input.on("pointerdown", (p: Phaser.Input.Pointer) => {
+      for (const input of [this.nameInput1, this.nameInput2]) {
+        if (!input || !input.focused) continue;
+        const b = input.bg.getBounds();
+        if (!Phaser.Geom.Rectangle.Contains(b, p.worldX, p.worldY)) input.blur();
+      }
     });
 
     this.setView("main");
@@ -452,7 +504,7 @@ export class MenuScene extends Phaser.Scene {
       slot.statusDot.setFillStyle(0x666666);
       return;
     }
-    const connected = source.kind === "keyboard" || this.inputReader.isPadConnected(source.padId);
+    const connected = source.kind === "keyboard" || this.inputReader.isPadConnected(source);
     slot.bg.setStrokeStyle(2, connected ? 0x444444 : 0xaa4444);
     slot.statusDot.setFillStyle(connected ? 0x55cc66 : 0xaa4444);
     const baseLabel = describeSource(source);
@@ -507,29 +559,35 @@ export class MenuScene extends Phaser.Scene {
       dx += dw + dgap;
     }
 
-    this.lapsCounter = this.makeCounter(cx, 490, "LAPS", () => this.laps, (v) => {
+    // Counters in a single row to keep the settings panel short on 1080p screens.
+    const counterRowY = 490;
+    this.lapsCounter = this.makeCounter(cx - 260, counterRowY, "LAPS", () => this.laps, (v) => {
       this.laps = Phaser.Math.Clamp(v, LAPS_MIN, LAPS_MAX);
       this.savePrefs();
       this.refresh();
     }, this.settingsObjects);
 
-    this.opponentsCounter = this.makeCounter(cx, 600, "OPPONENTS", () => this.opponents, (v) => {
+    this.opponentsCounter = this.makeCounter(cx, counterRowY, "OPPONENTS", () => this.opponents, (v) => {
       this.opponents = Phaser.Math.Clamp(v, OPPONENTS_MIN, OPPONENTS_MAX);
       this.savePrefs();
       this.refresh();
     }, this.settingsObjects);
 
-    this.playersCounter = this.makeCounter(cx, 700, "PLAYERS (LOCAL)", () => this.players, (v) => {
+    this.playersCounter = this.makeCounter(cx + 260, counterRowY, "PLAYERS (LOCAL)", () => this.players, (v) => {
       this.players = Phaser.Math.Clamp(v, PLAYERS_MIN, PLAYERS_MAX) as PlayerCount;
       this.savePrefs();
       this.refresh();
     }, this.settingsObjects);
 
-    this.drsModeP1 = this.makeDrsModePicker(cx - 200, 800, "DRS — P1", "p1");
-    this.drsModeP2 = this.makeDrsModePicker(cx + 200, 800, "DRS — P2", "p2");
+    this.buildNameInputs(cx, 575);
+
+    this.drsModeP1 = this.makeDrsModePicker(cx - 200, 690, "DRS — P1", "p1");
+    this.drsModeP2 = this.makeDrsModePicker(cx + 200, 690, "DRS — P2", "p2");
+
+    this.cockpitCamButtons = this.makeCockpitCamPicker(cx, 800, "CAMERA (1P ONLY)");
 
     this.doneBtn = this.addSettings(this.add
-      .text(cx, 920, "DONE", {
+      .text(cx, 890, "DONE", {
         fontFamily: "system-ui, sans-serif",
         fontSize: "24px",
         color: "#1a1a1a",
@@ -548,7 +606,7 @@ export class MenuScene extends Phaser.Scene {
 
   private buildCredits(cx: number) {
     this.addSettings(this.add
-      .text(cx, 990, "AUDIO CREDITS", {
+      .text(cx, 960, "AUDIO CREDITS", {
         fontFamily: "system-ui, sans-serif",
         fontSize: "13px",
         color: "#666666",
@@ -565,7 +623,7 @@ export class MenuScene extends Phaser.Scene {
     this.addSettings(this.add
       .text(
         cx,
-        1015,
+        985,
         "Engine loop — domasx2 (OpenGameArt) — CC0",
         lineStyle,
       )
@@ -574,7 +632,7 @@ export class MenuScene extends Phaser.Scene {
     this.addSettings(this.add
       .text(
         cx,
-        1035,
+        1005,
         "Tire skid loop — Tom Haigh / audible-edge (OpenGameArt) — CC-BY 3.0",
         lineStyle,
       )
@@ -629,6 +687,98 @@ export class MenuScene extends Phaser.Scene {
     return { label: labelText, buttons };
   }
 
+  // Two-button camera-mode picker (FIXED top-down vs COCKPIT car-locked rotation). Mirrors the
+  // DRS picker layout. The whole row only renders in 1P (gated in `refreshCockpitCamButtons`).
+  private makeCockpitCamPicker(cx: number, y: number, label: string): CamModeButtons {
+    const labelText = this.addSettings(this.add
+      .text(cx, y - 32, label, {
+        fontFamily: "system-ui, sans-serif",
+        fontSize: "14px",
+        color: "#888888",
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5));
+    const bw = 130;
+    const bh = 38;
+    const gap = 12;
+    const totalW = CAM_MODE_OPTIONS.length * bw + (CAM_MODE_OPTIONS.length - 1) * gap;
+    let bx = cx - totalW / 2 + bw / 2;
+    const buttons: CamModeButtons["buttons"] = [];
+    for (const mode of CAM_MODE_OPTIONS) {
+      const bg = this.addSettings(this.add
+        .rectangle(bx, y, bw, bh, 0x222222)
+        .setStrokeStyle(2, 0x444444)
+        .setInteractive({ useHandCursor: true }));
+      const lab = this.addSettings(this.add
+        .text(bx, y, mode === "fixed" ? "TOP-DOWN" : "COCKPIT", {
+          fontFamily: "system-ui, sans-serif",
+          fontSize: "16px",
+          color: "#ffffff",
+          fontStyle: "bold",
+        })
+        .setOrigin(0.5));
+      bg.on("pointerdown", () => {
+        this.cockpitCam = mode === "cockpit";
+        this.savePrefs();
+        this.refresh();
+      });
+      buttons.push({ mode, bg, label: lab });
+      bx += bw + gap;
+    }
+    return { label: labelText, buttons };
+  }
+
+  // P1 + P2 name inputs. Both are placed at the row centered on `y`. In 1P the P1 input sits
+  // centered (label "NAME"); in 2P they split left/right ("P1 NAME" / "P2 NAME"). Layout
+  // re-applied in `applyPlayersLayout` so the rest of the settings panel reuses the same toggle.
+  private buildNameInputs(cx: number, y: number) {
+    const labelStyle: Phaser.Types.GameObjects.Text.TextStyle = {
+      fontFamily: "system-ui, sans-serif",
+      fontSize: "14px",
+      color: "#888888",
+      fontStyle: "bold",
+    };
+    this.nameLabel1 = this.addSettings(
+      this.add.text(cx, y - 28, "NAME", labelStyle).setOrigin(0.5),
+    );
+    this.nameLabel2 = this.addSettings(
+      this.add.text(cx + 200, y - 28, "P2 NAME", labelStyle).setOrigin(0.5).setVisible(false),
+    );
+
+    this.nameInput1 = new TextInput({
+      scene: this,
+      x: cx,
+      y,
+      width: 220,
+      height: 40,
+      initialValue: this.name1,
+      maxLength: NAME_MAX_LENGTH,
+      fallback: DEFAULT_NAME_1,
+      onChange: (v) => {
+        this.name1 = v;
+        this.savePrefs();
+      },
+    });
+    this.addSettings(this.nameInput1.container);
+
+    this.nameInput2 = new TextInput({
+      scene: this,
+      x: cx + 200,
+      y,
+      width: 220,
+      height: 40,
+      initialValue: this.name2,
+      maxLength: NAME_MAX_LENGTH,
+      fallback: DEFAULT_NAME_2,
+      onChange: (v) => {
+        this.name2 = v;
+        this.savePrefs();
+      },
+    });
+    this.addSettings(this.nameInput2.container);
+    this.nameInput2.setVisible(false);
+  }
+
   private savePrefs() {
     saveMenuPrefs({
       track: this.selectedTrack,
@@ -638,6 +788,9 @@ export class MenuScene extends Phaser.Scene {
       laps: this.laps,
       opponents: this.opponents,
       players: this.players,
+      cockpitCam: this.cockpitCam,
+      name1: sanitizeName(this.name1, DEFAULT_NAME_1),
+      name2: sanitizeName(this.name2, DEFAULT_NAME_2),
     });
   }
 
@@ -654,6 +807,10 @@ export class MenuScene extends Phaser.Scene {
   private setView(view: View) {
     this.view = view;
     const onMain = view === "main";
+    if (onMain) {
+      this.nameInput1?.blur();
+      this.nameInput2?.blur();
+    }
     for (const o of this.mainObjects) (o as unknown as { setVisible: (v: boolean) => void }).setVisible(onMain);
     for (const o of this.settingsObjects) (o as unknown as { setVisible: (v: boolean) => void }).setVisible(!onMain);
     this.hintText?.setText(onMain ? "click to pick · ENTER to start" : "click to adjust · ESC to back");
@@ -683,7 +840,23 @@ export class MenuScene extends Phaser.Scene {
     this.playersCounter?.value.setText(String(this.players));
     this.refreshDrsButtons(this.drsModeP1, this.drsModes.p1, true);
     this.refreshDrsButtons(this.drsModeP2, this.drsModes.p2, this.players === 2);
+    this.refreshCockpitCamButtons();
     this.applyPlayersLayout();
+  }
+
+  private refreshCockpitCamButtons() {
+    if (!this.cockpitCamButtons) return;
+    const visible = this.players === 1 && this.view === "settings";
+    this.cockpitCamButtons.label.setVisible(visible);
+    const current: CamMode = this.cockpitCam ? "cockpit" : "fixed";
+    for (const b of this.cockpitCamButtons.buttons) {
+      b.bg.setVisible(visible);
+      b.label.setVisible(visible);
+      const selected = b.mode === current;
+      b.bg.setStrokeStyle(selected ? 3 : 2, selected ? 0xffd24a : 0x444444);
+      b.bg.setFillStyle(selected ? 0x2a2a2a : 0x1d1d1d);
+      b.label.setColor(selected ? "#ffd24a" : "#ffffff");
+    }
   }
 
   private refreshDrsButtons(group: DrsModeButtons | null, current: DrsMode, visible: boolean) {
@@ -726,6 +899,40 @@ export class MenuScene extends Phaser.Scene {
     this.padDebugTitle?.setVisible(showInputs);
     for (const r of this.padDebugRows) r.setVisible(showInputs);
     if (showInputs) this.refreshInputSlots();
+
+    // Settings-only name inputs: split left/right in 2P, single centered in 1P. Visibility is
+    // gated by `view === 'settings'` because the labels + containers live in `settingsObjects`.
+    const inSettings = this.view === "settings";
+    if (this.players === 2) {
+      this.nameLabel1?.setText("P1 NAME").setPosition(cx - 200, 547);
+      this.nameInput1?.setPosition(cx - 200, 575);
+      this.nameLabel2?.setPosition(cx + 200, 547).setVisible(inSettings);
+      this.nameInput2?.setPosition(cx + 200, 575);
+      this.nameInput2?.setVisible(inSettings);
+    } else {
+      this.nameLabel1?.setText("NAME").setPosition(cx, 547);
+      this.nameInput1?.setPosition(cx, 575);
+      this.nameLabel2?.setVisible(false);
+      this.nameInput2?.setVisible(false);
+    }
+  }
+
+  private isAnyNameInputFocused(): boolean {
+    return Boolean(this.nameInput1?.focused || this.nameInput2?.focused);
+  }
+
+  // Random subtitle drawn from `public/menu-subtitles.txt` (loaded once in BootScene).
+  // Strips comments / blanks; falls back to the original tagline if the file is missing or empty.
+  private pickSubtitle(): string {
+    const FALLBACK = "2D Racing Fury";
+    const raw = this.cache.text.get("menuSubtitles");
+    if (typeof raw !== "string") return FALLBACK;
+    const lines = raw
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0 && !l.startsWith("#"));
+    if (lines.length === 0) return FALLBACK;
+    return lines[Math.floor(Math.random() * lines.length)];
   }
 
   // Phaser lifecycle. Press-to-join polling + live debug refresh, only while the 2P
@@ -775,11 +982,11 @@ export class MenuScene extends Phaser.Scene {
         row.setText("");
         continue;
       }
-      const snap = this.inputReader.getPadDebugSnapshot(pad.id);
+      const snap = this.inputReader.getPadDebugSnapshot({ padId: pad.id, padIndex: pad.index });
       const t = snap?.throttle ?? 0;
       const b = snap?.brake ?? 0;
       const lx = snap?.steerX ?? 0;
-      const padSrc: InputSource = { kind: "pad", padId: pad.id };
+      const padSrc: InputSource = { kind: "pad", padId: pad.id, padIndex: pad.index };
       const slot = sourcesEqual(this.assignments.p1, padSrc)
         ? "→ P1"
         : sourcesEqual(this.assignments.p2, padSrc)
@@ -857,6 +1064,9 @@ export class MenuScene extends Phaser.Scene {
       opponents: this.opponents,
       inputSources,
       drsModes: this.drsModes,
+      cockpitCam: this.players === 1 && this.cockpitCam,
+      name1: sanitizeName(this.name1, DEFAULT_NAME_1),
+      name2: sanitizeName(this.name2, DEFAULT_NAME_2),
     });
   }
 

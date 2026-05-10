@@ -6,15 +6,19 @@ import type { CarInput } from "../entities/Car";
 // identified by its Gamepad.id so it survives reconnects across sessions.
 export type KeyboardScheme = "arrows" | "wasd";
 
+// `padIndex` is the live `Gamepad.index` slot. Two physically identical controllers (e.g. two
+// Switch Pro Controllers) report the *same* `Gamepad.id` string, so an id-only identity treats
+// them as the same source. Identity uses `padIndex`; `padId` is kept for display + reconnect-time
+// rebinding when an index slot has shifted between sessions.
 export type InputSource =
   | { kind: "keyboard"; scheme: KeyboardScheme }
-  | { kind: "pad"; padId: string };
+  | { kind: "pad"; padId: string; padIndex: number };
 
 export function sourcesEqual(a: InputSource | null, b: InputSource | null): boolean {
   if (!a || !b) return a === b;
   if (a.kind !== b.kind) return false;
   if (a.kind === "keyboard" && b.kind === "keyboard") return a.scheme === b.scheme;
-  if (a.kind === "pad" && b.kind === "pad") return a.padId === b.padId;
+  if (a.kind === "pad" && b.kind === "pad") return a.padIndex === b.padIndex;
   return false;
 }
 
@@ -122,7 +126,7 @@ export class InputReader {
         useDrs: Phaser.Input.Keyboard.JustDown(this.keys.q),
       };
     }
-    const pad = this.findPad(source.padId);
+    const pad = this.resolvePad(source);
     if (!pad) {
       return { throttle: 0, brake: 0, steer: 0, useItem: false, useDrs: false };
     }
@@ -147,7 +151,7 @@ export class InputReader {
       if (source.scheme === "arrows") return this.keys.up.isDown ? 1 : 0;
       return this.keys.w.isDown ? 1 : 0;
     }
-    return this.findPad(source.padId)?.buttons[7]?.value ?? 0;
+    return this.resolvePad(source)?.buttons[7]?.value ?? 0;
   }
 
   readAutoThrottle(): number {
@@ -179,7 +183,7 @@ export class InputReader {
     if (!firstPad) {
       return { ...kbInput, useItem: useItemKb, useDrs: useDrsKb };
     }
-    const padInput = this.read({ kind: "pad", padId: firstPad.id });
+    const padInput = this.read({ kind: "pad", padId: firstPad.id, padIndex: firstPad.index });
     return {
       throttle: Math.max(kbInput.throttle, padInput.throttle),
       brake: Math.max(kbInput.brake, padInput.brake),
@@ -221,7 +225,7 @@ export class InputReader {
 
     for (const pad of getPads()) {
       if (!pad || !pad.connected) continue;
-      const padSrc: InputSource = { kind: "pad", padId: pad.id };
+      const padSrc: InputSource = { kind: "pad", padId: pad.id, padIndex: pad.index };
       if (isExcluded(padSrc)) continue;
       const triggerHit = (pad.buttons[6]?.value ?? 0) > 0.3 || (pad.buttons[7]?.value ?? 0) > 0.3;
       let buttonHit = false;
@@ -245,12 +249,12 @@ export class InputReader {
     return out;
   }
 
-  isPadConnected(padId: string): boolean {
-    return this.findPad(padId) !== null;
+  isPadConnected(source: { padIndex: number; padId: string }): boolean {
+    return this.resolvePad(source) !== null;
   }
 
-  getPadDebugSnapshot(padId: string): PadDebugSnapshot | null {
-    const pad = this.findPad(padId);
+  getPadDebugSnapshot(source: { padIndex: number; padId: string }): PadDebugSnapshot | null {
+    const pad = this.resolvePad(source);
     if (!pad) return null;
     const pressed: number[] = [];
     for (let i = 0; i < pad.buttons.length; i++) {
@@ -266,9 +270,15 @@ export class InputReader {
     };
   }
 
-  private findPad(padId: string): Gamepad | null {
-    for (const p of getPads()) {
-      if (p && p.connected && p.id === padId) return p;
+  // Resolve a pad source against the live gamepad list. Index-first (so two identical controllers
+  // route to distinct slots within a session). If the slot is empty or holds a different model,
+  // fall back to id-match — covers the case where the OS renumbered controllers between sessions.
+  private resolvePad(source: { padIndex: number; padId: string }): Gamepad | null {
+    const pads = getPads();
+    const direct = pads[source.padIndex];
+    if (direct && direct.connected && direct.id === source.padId) return direct;
+    for (const p of pads) {
+      if (p && p.connected && p.id === source.padId) return p;
     }
     return null;
   }
@@ -307,12 +317,20 @@ export function saveAssignments(a: InputAssignments) {
 
 function validateSource(s: unknown): InputSource | null {
   if (!s || typeof s !== "object") return null;
-  const obj = s as { kind?: unknown; scheme?: unknown; padId?: unknown };
+  const obj = s as { kind?: unknown; scheme?: unknown; padId?: unknown; padIndex?: unknown };
   if (obj.kind === "keyboard" && (obj.scheme === "arrows" || obj.scheme === "wasd")) {
     return { kind: "keyboard", scheme: obj.scheme };
   }
-  if (obj.kind === "pad" && typeof obj.padId === "string") {
-    return { kind: "pad", padId: obj.padId };
+  if (
+    obj.kind === "pad" &&
+    typeof obj.padId === "string" &&
+    typeof obj.padIndex === "number" &&
+    Number.isInteger(obj.padIndex) &&
+    obj.padIndex >= 0
+  ) {
+    return { kind: "pad", padId: obj.padId, padIndex: obj.padIndex };
   }
+  // Pre-`padIndex` saves stored only `padId`. Drop them so the user re-presses to bind — this
+  // also forces a clean rebind when the user has multiple identical controllers.
   return null;
 }

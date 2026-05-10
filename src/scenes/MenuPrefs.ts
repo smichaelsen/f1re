@@ -24,7 +24,17 @@ export interface MenuPrefs {
   laps: number;
   opponents: number;
   players: PlayerCount;
+  // 1P-only camera mode. When true, the world rotates so player heading is always up.
+  // Forced false in 2P (split-screen would need its own design).
+  cockpitCam: boolean;
+  // Player display names. Up to NAME_MAX_LENGTH chars; uppercase A-Z, 0-9, space.
+  name1: string;
+  name2: string;
 }
+
+export const NAME_MAX_LENGTH = 8;
+export const DEFAULT_NAME_1 = "PLAYER 1";
+export const DEFAULT_NAME_2 = "PLAYER 2";
 
 const STORAGE_KEY = "f1re.menu.prefs";
 const DIFFICULTIES_VALID: Difficulty[] = ["easy", "normal", "hard"];
@@ -39,7 +49,19 @@ export function defaultMenuPrefs(): MenuPrefs {
     laps: 3,
     opponents: 5,
     players: 1,
+    cockpitCam: false,
+    name1: DEFAULT_NAME_1,
+    name2: DEFAULT_NAME_2,
   };
+}
+
+export function sanitizeName(raw: unknown, fallback: string): string {
+  if (typeof raw !== "string") return fallback;
+  const cleaned = raw
+    .toUpperCase()
+    .replace(/[^A-Z0-9 ]/g, "")
+    .slice(0, NAME_MAX_LENGTH);
+  return cleaned.length > 0 ? cleaned : fallback;
 }
 
 export function loadMenuPrefs(): MenuPrefs {
@@ -57,6 +79,9 @@ export function loadMenuPrefs(): MenuPrefs {
       laps: clampInt(parsed?.laps, LAPS_MIN, LAPS_MAX, defaults.laps),
       opponents: clampInt(parsed?.opponents, OPPONENTS_MIN, OPPONENTS_MAX, defaults.opponents),
       players: parsePlayers(parsed?.players, defaults.players),
+      cockpitCam: typeof parsed?.cockpitCam === "boolean" ? parsed.cockpitCam : defaults.cockpitCam,
+      name1: sanitizeName(parsed?.name1, defaults.name1),
+      name2: sanitizeName(parsed?.name2, defaults.name2),
     };
   } catch {
     return defaults;

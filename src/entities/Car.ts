@@ -70,7 +70,9 @@ export class Car {
   // 0..1 multiplier on baseline grip. Snaps down when a surface or event requests a penalty;
   // recovers linearly toward 1 over GRIP_RECOVERY_SEC. Drives lateral traction in update().
   gripFactor = 1;
-  itemSlot: string | null = null;
+  // FIFO inventory: oldest item at index 0, newest at the end. Use consumes from the front.
+  // Capacity is enforced by RaceScene at pickup time (currently 2).
+  items: string[] = [];
   useItemAt: number | null = null;
 
   // DRS state. `drsAvailable` is set when the car crosses a detection point within DRS_GAP_MS of
