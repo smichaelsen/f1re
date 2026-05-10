@@ -51,6 +51,7 @@ Per-zone Drag Reduction System. Detection points evaluate gap; cars within a 1s 
 ### Sample data
 - `stadium.json`: two detections (idx 74 in top-left arc, idx 34 in bottom-right arc), two zones (top straight 0→5, bottom straight 40→45). Each detection feeds the next straight's zone; eligibility resets per detection. The grid sits at `startIndex=4` between zone 1's start (0) and end (5) gates; edge detection only fires on band-enter, so cars at rest at race start don't spuriously trigger.
 - `champions-wall.json`: one shared detection (idx 145, halfway between T9 and T10) feeds two zones — Zone 1 (T12 → shortly before T13, idx 190→198) and Zone 2 (halfway WoC↔checker → shortly before T1, idx 215→17 wrapping). One gap measurement on the back-straight approach grants eligibility for both zones in that lap (Spa-style).
+- `temple-of-speed.json`: two detections / two zones. Detection 188 (mid Inter-Lesmo short straight) feeds Zone 1 (idx 218→240, second half of post-Lesmo back-straight to pre-Ascari). Detection 311 (just before Parabolica entry) feeds Zone 2 (idx 20→48, second half of start/finish straight to pre-Variante del Rettifilo). Zones intentionally short — long Monza straights mean even ~22-unit DRS windows produce big speed gains; full-length zones over-favoured the chaser in playtests.
 
 ## Architecture Decisions
 - **Detection logging is unconditional.** Pre-`drsEnabled` crossings still write to the log even though they can't grant DRS, so the first post-enable lap has prior records on the same `car.lap` to match against. Without this, the first detection cross post-enable would always come up empty.
@@ -65,7 +66,7 @@ Per-zone Drag Reduction System. Detection points evaluate gap; cars within a 1s 
 - Detection records grow unbounded over the race (small — ~1 per car per zone per lap, so ~36 records per zone over a 3-lap race with 4 cars). Trim to last N entries if races get long, but not needed at current scale.
 
 ## Next Up
-- Add DRS data to `temple-of-speed` (Monza-shaped — 3 long straights would map nicely).
+- Add DRS data to `oval` if desired (single sweeping straight pair could map to one zone each).
 - Per-track tuning of AI delay constants if zones differ wildly in length.
 
 ## Architecture Decisions (continued)

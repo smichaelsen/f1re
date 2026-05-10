@@ -21,7 +21,7 @@ Detailed progress lives in topic files under `context/progress/`. Read the files
 
 ## Current Phase
 - Phase 2 of runoff system shipped. Per-segment runoff widths now available (see `progress/track-rendering.md`).
-- DRS shipped: schema + engine + HUD + inspector overlay + airflow particles. Stadium has two zones; other tracks DRS-less for now (`progress/drs.md`).
+- DRS shipped: schema + engine + HUD + inspector overlay + airflow particles. Stadium, Champions' Wall, and Temple of Speed all have DRS data; Oval still DRS-less (`progress/drs.md`).
 
 ## Cross-Cutting Architecture Decisions
 - **No persistence, no network, no third-party UI library.** Stays a single-page client-only app. Revisit only if a multiplayer or accounts feature gets prioritized.

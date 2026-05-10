@@ -144,6 +144,18 @@ export default {
       inside:  { surface: "grass", width: 30 },
     },
     patches: templeOfSpeedPatches(),
+    // Two DRS zones on Monza's two longest flat-out sections.
+    // Detection 188 (mid Inter-Lesmo straight) feeds Zone 1 (back-straight → pre-Ascari).
+    // Detection 311 (just before Parabolica entry) feeds Zone 2 (start/finish straight).
+    // Zones intentionally cover only the back half of each straight — long Monza flats give
+    // chasers a big speed gain even on a short window, and full-length zones over-favoured them.
+    drs: {
+      detections: [188, 311],
+      zones: [
+        { startIndex: 218, endIndex: 240 },
+        { startIndex: 20,  endIndex: 48 },
+      ],
+    },
     centerline: templeOfSpeedCenterline(),
   },
 };

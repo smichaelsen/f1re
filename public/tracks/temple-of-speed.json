@@ -722,6 +722,22 @@
       ]
     }
   ],
+  "drs": {
+    "detections": [
+      188,
+      311
+    ],
+    "zones": [
+      {
+        "startIndex": 218,
+        "endIndex": 240
+      },
+      {
+        "startIndex": 20,
+        "endIndex": 48
+      }
+    ]
+  },
   "centerline": [
     {
       "x": 2000,

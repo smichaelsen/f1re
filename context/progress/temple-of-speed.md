@@ -12,6 +12,7 @@ Monza-shaped: chicanes + flat-out straights. Largest track. Currently 349 points
 - Schema v2, default grass runoff (outside 80, inside 30).
 - Gravel patches: outside arc-1 (T1 entry, south side), outside arc-2 (T2 escape area, north side), plus outside-arc gravel for Curva Grande, Lesmo 1, Parabolica.
 - `MenuScene.TRACKS` entry; selectable from menu. `startIndex = 26`.
+- DRS: two detections / two zones. Detection 188 (mid Inter-Lesmo straight) feeds Zone 1 (idx 218→240, second half of back-straight to pre-Ascari). Detection 311 (just before Parabolica entry) feeds Zone 2 (idx 20→48, second half of start/finish straight to pre-Variante del Rettifilo).
 
 ## Architecture Decisions
 - **Real Monza shape over straight-line preventability via sin-wave.** The original sin-wave chicane forced cars off-line at the apex but produced self-intersecting offset polygons (the X-pattern walls). Switched all three chicanes to arc-based geometry; this both renders cleanly and matches the real track's shape.
