@@ -10,6 +10,10 @@ export class BootScene extends Phaser.Scene {
     this.makePickupTexture("pickup", 0xffffff);
     this.load.audio("engine", "audio/engine.wav");
     this.load.audio("skid", "audio/skid.wav");
+    // Menu subtitle pool. Plain-text, one line per subtitle; comments (lines starting with `#`)
+    // and blank lines are skipped at render time. Lives in `public/` so users can edit without
+    // a rebuild.
+    this.load.text("menuSubtitles", "menu-subtitles.txt");
   }
 
   create() {

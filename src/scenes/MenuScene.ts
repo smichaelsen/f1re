@@ -196,7 +196,7 @@ export class MenuScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     this.add
-      .text(cx, 150, "2D Racing Fury", {
+      .text(cx, 150, this.pickSubtitle(), {
         fontFamily: "system-ui, sans-serif",
         fontSize: "20px",
         color: "#aaaaaa",
@@ -919,6 +919,20 @@ export class MenuScene extends Phaser.Scene {
 
   private isAnyNameInputFocused(): boolean {
     return Boolean(this.nameInput1?.focused || this.nameInput2?.focused);
+  }
+
+  // Random subtitle drawn from `public/menu-subtitles.txt` (loaded once in BootScene).
+  // Strips comments / blanks; falls back to the original tagline if the file is missing or empty.
+  private pickSubtitle(): string {
+    const FALLBACK = "2D Racing Fury";
+    const raw = this.cache.text.get("menuSubtitles");
+    if (typeof raw !== "string") return FALLBACK;
+    const lines = raw
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0 && !l.startsWith("#"));
+    if (lines.length === 0) return FALLBACK;
+    return lines[Math.floor(Math.random() * lines.length)];
   }
 
   // Phaser lifecycle. Press-to-join polling + live debug refresh, only while the 2P
