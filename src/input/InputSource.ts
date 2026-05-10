@@ -63,6 +63,9 @@ export interface PadDebugSnapshot {
 
 // Standard-gamepad button index for the right shoulder (R / RB). Used as the manual DRS button.
 const PAD_DRS_BUTTON = 5;
+// Standard-gamepad button index for "Start" / "Options" / "+" — used to toggle pause from any
+// connected controller. Switch Pro Controller's "+" reports here.
+const PAD_PAUSE_BUTTON = 9;
 
 export class InputReader {
   private keys: {
@@ -86,6 +89,8 @@ export class InputReader {
   private prevPadEast = new Map<number, boolean>();
   // Per-pad edge state for the DRS shoulder button.
   private prevPadDrs = new Map<number, boolean>();
+  // Per-pad edge state for the pause button (Switch +, Xbox Start, PS Options).
+  private prevPadPause = new Map<number, boolean>();
 
   constructor(scene: Phaser.Scene) {
     const kb = scene.input.keyboard;
@@ -143,6 +148,21 @@ export class InputReader {
       useItem: east && !prev,
       useDrs: drs && !prevDrs,
     };
+  }
+
+  // Edge-detect the Start/+ button (Switch +, Xbox Start, PS Options) on any connected
+  // pad. Returns true on the frame of a fresh press; must be called once per frame to
+  // maintain per-pad edge state. Used by RaceScene for the pad-pause toggle.
+  pollPadPauseEdge(): boolean {
+    let fired = false;
+    for (const p of getPads()) {
+      if (!p || !p.connected) continue;
+      const pressed = !!p.buttons[PAD_PAUSE_BUTTON]?.pressed;
+      const prev = this.prevPadPause.get(p.index) ?? false;
+      if (pressed && !prev) fired = true;
+      this.prevPadPause.set(p.index, pressed);
+    }
+    return fired;
   }
 
   // Side-effect-free throttle read for pre-race revs. Avoids advancing edge-detection state.

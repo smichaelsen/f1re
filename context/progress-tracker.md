@@ -18,6 +18,7 @@ Detailed progress lives in topic files under `context/progress/`. Read the files
 - [Game chrome (menus, overlays, cars sprite, camera, inspector)](progress/game-chrome.md)
 - [Audio (bus, positional sources, engine)](progress/audio.md)
 - [DRS (zones, detection points, activation)](progress/drs.md)
+- [Car catalog (per-team perf profiles)](progress/car-catalog.md)
 
 ## Current Phase
 - Phase 2 of runoff system shipped. Per-segment runoff widths now available (see `progress/track-rendering.md`).
@@ -33,7 +34,6 @@ None active across systems. See per-topic files for narrower questions.
 
 ## Cross-Cutting Next Up (User picks)
 1. **Better AI** — racing-line offset (shipped), corner brake-points, item awareness (also tracked in `progress/ai-driving.md`).
-2. **Car catalog** — beyond colour: `accel`, `topSpeed`, `grip` profiles per car with pick at menu.
 
 ## Session Notes
 - Static build is served at `http://localhost:4273` (via `vite preview`). Dev server with hot reload runs at `http://localhost:5273` (`vite dev`). When operating in the file system, the user plays the static build to avoid hot-reload glitches.

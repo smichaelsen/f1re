@@ -7,6 +7,9 @@ export interface PositionRow {
   isPlayer: boolean;
   lapsDone: number;
   finished: boolean;
+  // Texture key for this car's livery sprite. Hud renders a small car icon to the left of
+  // each row so the player can see at a glance what teams the cars in the field belong to.
+  textureKey: string;
 }
 
 export type HudSide = "left" | "right";
@@ -56,9 +59,18 @@ export class Hud {
   broadcastText: Phaser.GameObjects.Text | null = null;
   posTitle: Phaser.GameObjects.Text | null = null;
   posRows: Phaser.GameObjects.Text[] = [];
+  // One car-livery icon sprite per position row, placed to the left of the row text in
+  // update() so the player can see at a glance which team each rival belongs to.
+  posRowIcons: Phaser.GameObjects.Sprite[] = [];
   countdownText: Phaser.GameObjects.Text | null = null;
   resultsBg: Phaser.GameObjects.Rectangle | null = null;
   resultsText: Phaser.GameObjects.Text | null = null;
+  // Pool of car-livery sprites used by the results panel — one per line in the results text
+  // (sized to the max number of position rows passed at construction). Index i lines up with
+  // line i of resultsText; lines without a row (header / blank / footer) leave their slot's
+  // iconKey null and the sprite stays hidden.
+  resultsRowIcons: Phaser.GameObjects.Sprite[] = [];
+  resultsIconKeys: (string | null)[] = [];
   objects: Phaser.GameObjects.GameObject[] = [];
   resultsCompact = false;
   msgFadeUntil = 0;
@@ -144,6 +156,32 @@ export class Hud {
           .setScrollFactor(0)
           .setDepth(1000);
         this.posRows.push(row);
+        // Position-row icon. Origin (1, 0.5) so its right edge anchors to text.left - gap.
+        // __DEFAULT is Phaser's built-in 32×32 white texture and is always loaded; it acts as
+        // a placeholder until setPositions swaps in the car's livery key. Hidden by default.
+        const posIcon = scene.add
+          .sprite(0, 0, "__DEFAULT")
+          .setOrigin(1, 0.5)
+          .setScale(0.55)
+          .setScrollFactor(0)
+          .setDepth(1000)
+          .setVisible(false);
+        this.posRowIcons.push(posIcon);
+      }
+      // Results-icon pool: one sprite per possible *line* in the results text, not per row,
+      // so header / blank / footer slots have a corresponding (hidden) sprite that just
+      // never gets a non-null iconKey. Sized at positionRowCount + 4 to cover the worst
+      // case (header[2 lines] + position rows + footer[2 lines]).
+      const RESULTS_ICON_POOL = positionRowCount + 4;
+      for (let i = 0; i < RESULTS_ICON_POOL; i++) {
+        const resIcon = scene.add
+          .sprite(0, 0, "__DEFAULT")
+          .setOrigin(1, 0.5)
+          .setScale(0.6)
+          .setScrollFactor(0)
+          .setDepth(1202)
+          .setVisible(false);
+        this.resultsRowIcons.push(resIcon);
       }
       this.countdownText = scene.add
         .text(0, 0, "", {
@@ -179,7 +217,16 @@ export class Hud {
         .setDepth(1201)
         .setVisible(false);
 
-      this.objects.push(this.posTitle, ...this.posRows, this.countdownText, this.broadcastText, this.resultsBg, this.resultsText);
+      this.objects.push(
+        this.posTitle,
+        ...this.posRows,
+        ...this.posRowIcons,
+        ...this.resultsRowIcons,
+        this.countdownText,
+        this.broadcastText,
+        this.resultsBg,
+        this.resultsText,
+      );
     }
   }
 
@@ -261,14 +308,24 @@ export class Hud {
     if (this.posRows.length === 0) return;
     for (let i = 0; i < this.posRows.length; i++) {
       const r = rows[i];
+      const icon = this.posRowIcons[i];
       if (!r) {
         this.posRows[i].setText("");
+        icon?.setVisible(false);
         continue;
       }
-      const tag = r.finished ? "✓" : `L${Math.min(r.lapsDone + 1, totalLaps)}`;
+      // Checkered flag emoji marks finished drivers. While AI cars cross the line and the
+      // player is still racing, this is the only place that flag shows up — the compact
+      // results panel was removed because it duplicated the leaderboard's information.
+      const tag = r.finished ? "🏁" : `L${Math.min(r.lapsDone + 1, totalLaps)}`;
       const text = `P${r.pos} ${r.name}  ${tag}`;
       this.posRows[i].setText(text);
       this.posRows[i].setColor(r.isPlayer ? "#ffd24a" : "#ffffff");
+      // Each row's car icon. Texture key comes through PositionRow from the live car sprite,
+      // so liveries match the in-world cars (including the random per-car variant).
+      if (icon) {
+        icon.setTexture(r.textureKey).setVisible(true);
+      }
     }
   }
 
@@ -282,7 +339,10 @@ export class Hud {
     this.countdownText?.setVisible(false);
   }
 
-  showResults(lines: string[], compact = false) {
+  // `iconKeys` is parallel to `lines` — index i is the car-livery texture for line i, or
+  // null for non-row lines (header / blank / footer). Caller is responsible for keeping the
+  // arrays in sync; if iconKeys is shorter than lines the missing slots default to null.
+  showResults(lines: string[], iconKeys: (string | null)[], compact = false) {
     if (!this.resultsText || !this.resultsBg) return;
     this.resultsCompact = compact;
     this.resultsText.setText(lines.join("\n"));
@@ -292,10 +352,13 @@ export class Hud {
     });
     this.resultsText.setVisible(true);
     this.resultsBg.setVisible(true);
+    this.resultsIconKeys = iconKeys.slice(0, this.resultsRowIcons.length);
   }
   hideResults() {
     this.resultsText?.setVisible(false);
     this.resultsBg?.setVisible(false);
+    for (const icon of this.resultsRowIcons) icon.setVisible(false);
+    this.resultsIconKeys = [];
   }
 
   // `multiplayer` = true reroutes the position panel to the bottom-center of the screen,
@@ -360,9 +423,30 @@ export class Hud {
           this.posRows[i].setStyle({ ...this.posRows[i].style, fontSize: "20px" });
         }
       }
+      // Position each row's car icon to the left of its text. getLeftCenter() is origin-aware
+      // so the same code works for both right-anchored 1P and center-anchored 2P layouts.
+      const ICON_GAP = 6;
+      for (let i = 0; i < this.posRowIcons.length; i++) {
+        const icon = this.posRowIcons[i];
+        if (!icon.visible) continue;
+        const text = this.posRows[i];
+        if (!text.text) {
+          icon.setVisible(false);
+          continue;
+        }
+        const lc = text.getLeftCenter();
+        icon.setPosition(lc.x - ICON_GAP, lc.y);
+      }
     }
 
     if (this.resultsText && this.resultsBg) {
+      // Reserve a column to the left of the results text for car icons. Width chosen to fit
+      // the icon at its current scale (≈26px wide) plus gap on each side. The bg widens by
+      // the same amount so the icons sit visually inside the dimmed panel rather than
+      // floating against the live game world.
+      const ICON_COL_W = this.resultsCompact ? 24 : 32;
+      const visibleIconCount = this.resultsIconKeys.filter((k) => k != null).length;
+      const reserveIconCol = visibleIconCount > 0;
       if (this.resultsCompact) {
         const padX = 16;
         const padY = 16;
@@ -370,19 +454,44 @@ export class Hud {
         const txtPadY = 10;
         this.resultsText.setOrigin(1, 1);
         this.resultsText.setPosition(cam.width - padX - txtPadX, cam.height - padY - txtPadY);
-        const w = Math.max(140, this.resultsText.displayWidth + txtPadX * 2);
+        const w = Math.max(140, this.resultsText.displayWidth + txtPadX * 2 + (reserveIconCol ? ICON_COL_W : 0));
         const h = Math.max(40, this.resultsText.displayHeight + txtPadY * 2);
         this.resultsBg.setOrigin(1, 1);
         this.resultsBg.setPosition(cam.width - padX, cam.height - padY);
         this.resultsBg.setSize(w, h);
       } else {
         this.resultsText.setOrigin(0.5);
-        this.resultsText.setPosition(cam.width / 2, cam.height / 2);
-        const w = Math.max(440, this.resultsText.displayWidth + 60);
+        // In full mode the panel is centered. With an icon column on the left, shift the
+        // text right by half the icon column width so the icons + text together remain
+        // visually centered inside the bg.
+        const xShift = reserveIconCol ? ICON_COL_W / 2 : 0;
+        this.resultsText.setPosition(cam.width / 2 + xShift, cam.height / 2);
+        const w = Math.max(440, this.resultsText.displayWidth + 60 + (reserveIconCol ? ICON_COL_W : 0));
         const h = Math.max(280, this.resultsText.displayHeight + 60);
         this.resultsBg.setOrigin(0.5);
         this.resultsBg.setPosition(cam.width / 2, cam.height / 2);
         this.resultsBg.setSize(w, h);
+      }
+      // Position each row icon over its line in the resultsText. getTopLeft() is
+      // origin-aware so it returns the text's actual top-left in screen space regardless of
+      // compact (origin 1,1) vs full (origin 0.5,0.5).
+      if (this.resultsText.visible && this.resultsIconKeys.length > 0) {
+        const tl = this.resultsText.getTopLeft();
+        const lineCount = Math.max(1, this.resultsText.text.split("\n").length);
+        const lineH = this.resultsText.displayHeight / lineCount;
+        const ICON_GAP = 6;
+        for (let i = 0; i < this.resultsRowIcons.length; i++) {
+          const icon = this.resultsRowIcons[i];
+          const key = this.resultsIconKeys[i] ?? null;
+          if (!key) {
+            icon.setVisible(false);
+            continue;
+          }
+          icon.setTexture(key).setVisible(true);
+          icon.setPosition(tl.x - ICON_GAP, tl.y + lineH * (i + 0.5));
+        }
+      } else {
+        for (const icon of this.resultsRowIcons) icon.setVisible(false);
       }
     }
     if (this.scene.time.now > this.msgFadeUntil) this.msgText.setText("");

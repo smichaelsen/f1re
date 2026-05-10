@@ -57,6 +57,12 @@ export class RaceAudioController {
     return this.audioBus;
   }
 
+  // Mute / unmute the whole bus for pause. Engines + skids keep looping in the background;
+  // only the master gain is ramped to 0 so resume can pick up exactly where it left off.
+  setMuted(muted: boolean): void {
+    this.audioBus?.setMuted(muted);
+  }
+
   update(humans: readonly Car[], racing: boolean): void {
     if (!this.audioBus) return;
     const now = this.scene.time.now;

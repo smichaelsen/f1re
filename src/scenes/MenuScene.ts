@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import { ensureCarTexture } from "../entities/CarSprite";
-import { DEFAULT_TEAM_ID, TEAMS, type Team, type TeamId } from "../entities/Team";
+import { DEFAULT_TEAM_ID, TEAM_PERF_MAX, TEAM_PERF_MIN, TEAMS, type Team, type TeamId } from "../entities/Team";
 import { writeInspect } from "../router";
 import { Carousel } from "../ui/Carousel";
 import {
@@ -109,7 +109,7 @@ const INPUT_DEBUG_ROWS = 4;
 
 type View = "main" | "settings" | "fastestLaps";
 
-const CONTENT_HEIGHT = 1030;
+const CONTENT_HEIGHT = 1180;
 
 export class MenuScene extends Phaser.Scene {
   selectedTeam: TeamId = DEFAULT_TEAM_ID;
@@ -144,6 +144,9 @@ export class MenuScene extends Phaser.Scene {
   fastestLapsBtn!: Phaser.GameObjects.Text;
   inspectBtn!: Phaser.GameObjects.Text;
   doneBtn!: Phaser.GameObjects.Text;
+  creditsTitle!: Phaser.GameObjects.Text;
+  creditsEngine!: Phaser.GameObjects.Text;
+  creditsSkid!: Phaser.GameObjects.Text;
   fastestLapsDoneBtn!: Phaser.GameObjects.Text;
   hintText!: Phaser.GameObjects.Text;
   // Fastest-laps view state.
@@ -303,7 +306,7 @@ export class MenuScene extends Phaser.Scene {
 
     const renderTeam = (scene: Phaser.Scene, container: Phaser.GameObjects.Container, team: Team) => {
       const car = scene.add
-        .sprite(0, -18, ensureCarTexture(scene, { primary: team.primary, secondary: team.secondary, variant: "sidepods" }))
+        .sprite(0, -18, ensureCarTexture(scene, { primary: team.primary, secondary: team.secondary, variant: team.variant }))
         .setScale(2.4);
       const name = scene.add
         .text(0, 22, team.name.toUpperCase(), {
@@ -314,6 +317,37 @@ export class MenuScene extends Phaser.Scene {
         })
         .setOrigin(0.5);
       container.add([car, name]);
+
+      // Stat bars: TOP / ACC / GRP horizontal bars below the carousel "1 / N" indicator (which
+      // sits at y=56 in carousel-container space). Bar fill maps perf [0.90, 1.10] → [0, 1].
+      const rows: { label: string; value: number }[] = [
+        { label: "TOP", value: team.perf.topSpeed },
+        { label: "ACC", value: team.perf.accel },
+        { label: "GRP", value: team.perf.grip },
+      ];
+      const BAR_W = 100;
+      const BAR_H = 5;
+      const ROW_H = 12;
+      const FIRST_Y = 72;
+      const BAR_X = -28;
+      const range = TEAM_PERF_MAX - TEAM_PERF_MIN;
+      rows.forEach((r, i) => {
+        const y = FIRST_Y + i * ROW_H;
+        const lbl = scene.add.text(BAR_X - 6, y, r.label, {
+          fontFamily: "ui-monospace, monospace",
+          fontSize: "11px",
+          color: "#888888",
+        }).setOrigin(1, 0.5);
+        const bg = scene.add
+          .rectangle(BAR_X, y, BAR_W, BAR_H, 0x222222)
+          .setOrigin(0, 0.5)
+          .setStrokeStyle(1, 0x444444);
+        const frac = Phaser.Math.Clamp((r.value - TEAM_PERF_MIN) / range, 0, 1);
+        const fill = scene.add
+          .rectangle(BAR_X, y, BAR_W * frac, BAR_H, 0xffd24a)
+          .setOrigin(0, 0.5);
+        container.add([lbl, bg, fill]);
+      });
     };
 
     this.teamCarousel = new Carousel<Team>({
@@ -359,7 +393,7 @@ export class MenuScene extends Phaser.Scene {
     this.addMain(this.teamCarousel2.container);
 
     this.addMain(this.add
-      .text(cx, 410, "TRACK", {
+      .text(cx, 425, "TRACK", {
         fontFamily: "system-ui, sans-serif",
         fontSize: "20px",
         color: "#888888",
@@ -459,11 +493,11 @@ export class MenuScene extends Phaser.Scene {
     this.settingsBtn.on("pointerout", () => this.settingsBtn.setColor("#888888"));
   }
 
-  // Two press-to-join slots, only visible in 2P main view (positioning handled in
+  // Two press-to-join slots, only visible in 2P settings view (positioning handled in
   // applyPlayersLayout). Click to clear and re-pair.
   private buildInputSlots(cx: number) {
-    this.inputSlots.push(this.makeInputSlot(cx - 200, 372, 0, "P1 INPUT"));
-    this.inputSlots.push(this.makeInputSlot(cx + 200, 372, 1, "P2 INPUT"));
+    this.inputSlots.push(this.makeInputSlot(cx - 200, 870, 0, "P1 INPUT"));
+    this.inputSlots.push(this.makeInputSlot(cx + 200, 870, 1, "P2 INPUT"));
     for (const s of this.inputSlots) s.container.setVisible(false);
   }
 
@@ -493,14 +527,14 @@ export class MenuScene extends Phaser.Scene {
     const statusDot = this.add.circle(w / 2 - 14, -h / 2 + 12, 5, 0x666666);
     container.add([bg, titleText, sourceText, statusDot]);
     bg.on("pointerdown", () => this.clearAssignment(playerIndex));
-    this.addMain(container);
+    this.addSettings(container);
     return { playerIndex, container, bg, title: titleText, sourceText, statusDot };
   }
 
   private buildPadDebugPanel(cx: number) {
-    this.padDebugTitle = this.addMain(
+    this.padDebugTitle = this.addSettings(
       this.add
-        .text(cx, 740, "CONNECTED CONTROLLERS", {
+        .text(cx, 925, "CONNECTED CONTROLLERS", {
           fontFamily: "system-ui, sans-serif",
           fontSize: "12px",
           color: "#666666",
@@ -511,14 +545,14 @@ export class MenuScene extends Phaser.Scene {
     );
     for (let i = 0; i < INPUT_DEBUG_ROWS; i++) {
       const row = this.add
-        .text(cx, 762 + i * 16, "", {
+        .text(cx, 947 + i * 16, "", {
           fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
           fontSize: "12px",
           color: "#888888",
         })
         .setOrigin(0.5)
         .setVisible(false);
-      this.addMain(row);
+      this.addSettings(row);
       this.padDebugRows.push(row);
     }
   }
@@ -649,7 +683,7 @@ export class MenuScene extends Phaser.Scene {
   }
 
   private buildCredits(cx: number) {
-    this.addSettings(this.add
+    this.creditsTitle = this.addSettings(this.add
       .text(cx, 960, "AUDIO CREDITS", {
         fontFamily: "system-ui, sans-serif",
         fontSize: "13px",
@@ -664,7 +698,7 @@ export class MenuScene extends Phaser.Scene {
       color: "#888888",
     };
 
-    this.addSettings(this.add
+    this.creditsEngine = this.addSettings(this.add
       .text(
         cx,
         985,
@@ -673,7 +707,7 @@ export class MenuScene extends Phaser.Scene {
       )
       .setOrigin(0.5));
 
-    this.addSettings(this.add
+    this.creditsSkid = this.addSettings(this.add
       .text(
         cx,
         1005,
@@ -972,9 +1006,10 @@ export class MenuScene extends Phaser.Scene {
     setAll(this.settingsObjects, view === "settings");
     setAll(this.fastestLapsObjects, view === "fastestLaps");
     this.hintText?.setText(view === "main" ? "click to pick · ENTER to start" : "click to adjust · ESC to back");
-    // P2 carousel is in `mainObjects`, so the loop above unconditionally shows it on main —
-    // re-apply the players-aware layout to hide it again when in 1P mode.
-    if (view === "main") this.applyPlayersLayout();
+    // The bulk setAll above unconditionally shows every object in the active view's list,
+    // including elements that are 1P/2P-conditional (P2 carousel in main, input slots in
+    // settings). Re-apply the players-aware layout so those stay hidden in 1P.
+    if (view === "main" || view === "settings") this.applyPlayersLayout();
     if (view === "fastestLaps") this.refreshFastestLaps();
     // Re-run the highlight + per-player visibility logic so the DRS picker selection state and
     // 1P/2P-aware row visibility reflect current data after the bulk visibility toggle above.
@@ -1039,7 +1074,9 @@ export class MenuScene extends Phaser.Scene {
     if (!this.teamCarousel || !this.teamCarousel2) return;
     const cam = this.cameras.main;
     const cx = cam.width / 2;
-    const showInputs = this.players === 2 && this.view === "main";
+    // Input config now lives in the settings view (2P-only). DONE shifts down to make room
+    // for the input section in 2P; in 1P it stays at its compact position.
+    const showInputs = this.players === 2 && this.view === "settings";
     if (this.players === 2) {
       this.teamLabel?.setText("P1 TEAM");
       this.teamLabel?.setPosition(cx - 200, 230);
@@ -1053,11 +1090,19 @@ export class MenuScene extends Phaser.Scene {
       this.teamLabel2?.setVisible(false);
       this.teamCarousel2.container.setVisible(false);
     }
-    this.inputSlots[0]?.container.setPosition(cx - 200, 372).setVisible(showInputs);
-    this.inputSlots[1]?.container.setPosition(cx + 200, 372).setVisible(showInputs);
+    this.inputSlots[0]?.container.setPosition(cx - 200, 870).setVisible(showInputs);
+    this.inputSlots[1]?.container.setPosition(cx + 200, 870).setVisible(showInputs);
     this.padDebugTitle?.setVisible(showInputs);
     for (const r of this.padDebugRows) r.setVisible(showInputs);
     if (showInputs) this.refreshInputSlots();
+    // DONE button shifts down only when the 2P input section is visible (in 2P settings view).
+    // In 1P or in the 2P main view, DONE keeps its compact 890 position. Audio credits stay
+    // pinned 70px below DONE so the footer block tracks the action button.
+    const doneY = this.players === 2 ? 1030 : 890;
+    this.doneBtn?.setPosition(cx, doneY);
+    this.creditsTitle?.setPosition(cx, doneY + 70);
+    this.creditsEngine?.setPosition(cx, doneY + 95);
+    this.creditsSkid?.setPosition(cx, doneY + 115);
 
     // Settings-only name inputs: split left/right in 2P, single centered in 1P. Visibility is
     // gated by `view === 'settings'` because the labels + containers live in `settingsObjects`.
@@ -1095,9 +1140,9 @@ export class MenuScene extends Phaser.Scene {
   }
 
   // Phaser lifecycle. Press-to-join polling + live debug refresh, only while the 2P
-  // input section is visible.
+  // input section is visible (in the settings view).
   update() {
-    if (this.players !== 2 || this.view !== "main") return;
+    if (this.players !== 2 || this.view !== "settings") return;
 
     const exclude: (InputSource | null)[] = [this.assignments.p1, this.assignments.p2];
     let changed = false;

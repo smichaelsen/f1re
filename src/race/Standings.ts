@@ -35,6 +35,7 @@ export function computePositions(cars: readonly Car[], track: Track): PositionRo
     isPlayer: car.isPlayer,
     lapsDone: car.lap,
     finished: car.finishedAtMs != null,
+    textureKey: car.sprite.texture.key,
   }));
 }
 

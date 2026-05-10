@@ -80,7 +80,3 @@ export function ensureCarTexture(scene: Phaser.Scene, livery: Livery): string {
   g.destroy();
   return key;
 }
-
-export function randomVariant(rng: () => number): CarDesign {
-  return CAR_DESIGN_VARIANTS[Math.floor(rng() * CAR_DESIGN_VARIANTS.length)];
-}

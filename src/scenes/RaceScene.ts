@@ -1,7 +1,8 @@
 import Phaser from "phaser";
 import { Car, DEFAULT_CAR, type CarInput, type SurfaceFeel } from "../entities/Car";
-import { ensureCarTexture, randomVariant } from "../entities/CarSprite";
-import { DEFAULT_TEAM_ID, TEAMS, teamById, type Team, type TeamId } from "../entities/Team";
+import { ensureCarTexture } from "../entities/CarSprite";
+import { DEFAULT_TEAM_ID, DRIVER_SKILL_MAX, DRIVER_SKILL_MIN, TEAMS, teamById, type Team, type TeamId, type TeamPerf } from "../entities/Team";
+import type { CarConfig } from "../types";
 import { Track } from "../entities/Track";
 import { parseTrackData, SURFACE_PARAMS } from "../entities/TrackData";
 import { Hud, formatRaceTime } from "../ui/Hud";
@@ -43,7 +44,7 @@ interface RaceInit {
   name1?: string;
   name2?: string;
 }
-type RaceState = "countdown" | "racing" | "finished";
+type RaceState = "countdown" | "racing" | "paused" | "finished";
 
 const NO_INPUT: CarInput = { throttle: 0, brake: 0, steer: 0, useItem: false, useDrs: false };
 
@@ -51,6 +52,18 @@ const NO_INPUT: CarInput = { throttle: 0, brake: 0, steer: 0, useItem: false, us
 // teleported back to its last gate. 30s catches genuinely wedged cars without making slow but
 // progressing recoveries (post-spin, off-track scrub) trip the watchdog.
 const UNSTUCK_TIMEOUT_MS = 30_000;
+
+// Apply a team's perf multipliers to DEFAULT_CAR. Used for human cars (no jitter on top —
+// the player gets exactly what the menu shows). AI inlines the same multiplication next to
+// the difficulty jitter roll.
+function applyTeamPerf(perf: TeamPerf): CarConfig {
+  return {
+    ...DEFAULT_CAR,
+    maxSpeed: DEFAULT_CAR.maxSpeed * perf.topSpeed,
+    accel: DEFAULT_CAR.accel * perf.accel,
+    grip: DEFAULT_CAR.grip * perf.grip,
+  };
+}
 
 export class RaceScene extends Phaser.Scene {
   // humans[0] is always the primary player (P1). humans.length === 2 in 2P mode.
@@ -107,6 +120,10 @@ export class RaceScene extends Phaser.Scene {
   private drsModes: DrsModes = defaultDrsModes();
   private drs!: DrsManager;
   escapeKey!: Phaser.Input.Keyboard.Key;
+  pauseKey!: Phaser.Input.Keyboard.Key;
+  // Wall-clock time at which the current pause started. Read on resume to compute the dt
+  // we shift every gameplay timestamp by, so paused intervals don't accelerate timers.
+  private pausedAtMs: number | null = null;
   uiCam!: Phaser.Cameras.Scene2D.Camera;
   private cockpitCam = false;
   private raceCam!: RaceCamera;
@@ -172,10 +189,10 @@ export class RaceScene extends Phaser.Scene {
       const livery = {
         primary: team.primary,
         secondary: team.secondary,
-        variant: randomVariant(Math.random),
+        variant: team.variant,
       };
       const name = this.playerNames[i] ?? `PLAYER ${i + 1}`;
-      const car = new Car(this, slot.x, slot.y, ensureCarTexture(this, livery), name, true);
+      const car = new Car(this, slot.x, slot.y, ensureCarTexture(this, livery), name, true, applyTeamPerf(team.perf));
       car.heading = slot.heading;
       car.playerIndex = i;
       car.teamId = team.id;
@@ -197,49 +214,65 @@ export class RaceScene extends Phaser.Scene {
       const pool = partners.length > 0 ? partners : fresh;
       return pool[Math.floor(Math.random() * pool.length)];
     };
-    // Pre-pass: pick all AI teams (teamCounts evolves so pair-fill works), then shuffle.
-    // Without the shuffle, paired teammates end up in adjacent grid slots — visually a
-    // "row of red, row of blue" line-up. Shuffle scatters teammates across the grid.
-    const aiTeams: typeof TEAMS[number][] = [];
+    // Pre-pass: pick all AI teams via pair-fill, record each AI's seat (0/1) so we can
+    // look up that driver's hardcoded skill, then assign a qualifying score. The grid is
+    // sorted by score (highest = slot 1, the front of the AI grid) so a top-team + top-skill
+    // AI usually qualifies near pole, and a bottom-team AI almost never does. Random jitter
+    // keeps the order non-deterministic — a high-skill mid-team driver can occasionally beat
+    // a top-team driver on an off day, but rarely. (Player keeps slot 0 regardless of team.)
+    const [sLow, sHigh] = params.skillRange;
+    const driverRange = DRIVER_SKILL_MAX - DRIVER_SKILL_MIN;
+    // Linear scale of a hardcoded driver skill into the active difficulty's skillRange. The
+    // mapping preserves driver ranking within a difficulty: Hunter (0.99) is always the
+    // sharpest AI, Costa (0.47) always the dullest, but the absolute spread compresses on
+    // easy and shifts upward on hard.
+    const scaleSkill = (driverSkill: number): number => {
+      const t = Phaser.Math.Clamp((driverSkill - DRIVER_SKILL_MIN) / driverRange, 0, 1);
+      return sLow + t * (sHigh - sLow);
+    };
+    const aiEntries: { team: typeof TEAMS[number]; seat: number; skill: number; qualiScore: number }[] = [];
     for (let i = 0; i < this.opponentCount; i++) {
       const team = pickAiTeam();
-      teamCounts.set(team.id, (teamCounts.get(team.id) ?? 0) + 1);
-      aiTeams.push(team);
+      // teamCounts already has humans pre-loaded, so a team with 1 human gets seat=1 for
+      // the first AI on it (drivers[1] = the #2 seat). Increment after reading so subsequent
+      // pickAiTeam calls see the updated count for pair-fill logic.
+      const seat = teamCounts.get(team.id) ?? 0;
+      teamCounts.set(team.id, seat + 1);
+      const driverIdx = Math.min(seat, team.driverSkills.length - 1);
+      const skill = scaleSkill(team.driverSkills[driverIdx]);
+      const perfAvg = (team.perf.topSpeed + team.perf.accel + team.perf.grip) / 3;
+      // Weights tuned so team perf dominates (~0.13 spread between top and bottom tier on
+      // perf alone), skill adds a meaningful but secondary contribution (~0.09 spread across
+      // the difficulty's skillRange at weight 0.15), and random jitter (~0.10 max) tops up.
+      const qualiScore = perfAvg + skill * 0.15 + Math.random() * 0.10;
+      aiEntries.push({ team, seat, skill, qualiScore });
     }
-    for (let i = aiTeams.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [aiTeams[i], aiTeams[j]] = [aiTeams[j], aiTeams[i]];
-    }
-    // Reset teamCounts to humans-only so the seen-counter in the construction loop
-    // walks from drivers[0] up again per team.
-    teamCounts.clear();
-    for (const t of humanTeams) teamCounts.set(t.id, (teamCounts.get(t.id) ?? 0) + 1);
+    aiEntries.sort((a, b) => b.qualiScore - a.qualiScore);
     for (let i = 0; i < this.opponentCount; i++) {
       // AI cars start behind all humans on the grid: offset by humans.length so a 2-player race
       // puts AI in slots 2..N rather than overlapping P2.
       const slot = gridSlot(this.track, this.humans.length + i);
-      const team = aiTeams[i];
+      const { team, seat, skill } = aiEntries[i];
       const livery = {
         primary: team.primary,
         secondary: team.secondary,
-        variant: randomVariant(Math.random),
+        variant: team.variant,
       };
-      const seen = (teamCounts.get(team.id) ?? 0) + 1;
-      teamCounts.set(team.id, seen);
-      // Two driver names per team, one per car slot; aiTeamPool ensures `seen` is 1 or 2.
-      const aiName = team.drivers[Phaser.Math.Clamp(seen - 1, 0, team.drivers.length - 1)];
+      const driverIdx = Math.min(seat, team.drivers.length - 1);
+      const aiName = team.drivers[driverIdx];
       const [pLow, pHigh] = params.perfRange;
-      const [sLow, sHigh] = params.skillRange;
+      // AI stacks team perf × difficulty jitter on top of DEFAULT_CAR. Each axis rolls its
+      // own jitter sample so a single AI can be e.g. fast on top end but slow on accel.
       const aiCar = new Car(this, slot.x, slot.y, ensureCarTexture(this, livery), aiName, false, {
         ...DEFAULT_CAR,
-        maxSpeed: DEFAULT_CAR.maxSpeed * Phaser.Math.FloatBetween(pLow, pHigh),
-        accel: DEFAULT_CAR.accel * Phaser.Math.FloatBetween(pLow, pHigh),
-        grip: DEFAULT_CAR.grip * Phaser.Math.FloatBetween(pLow, pHigh),
+        maxSpeed: DEFAULT_CAR.maxSpeed * team.perf.topSpeed * Phaser.Math.FloatBetween(pLow, pHigh),
+        accel: DEFAULT_CAR.accel * team.perf.accel * Phaser.Math.FloatBetween(pLow, pHigh),
+        grip: DEFAULT_CAR.grip * team.perf.grip * Phaser.Math.FloatBetween(pLow, pHigh),
       });
       aiCar.heading = slot.heading;
       aiCar.teamId = team.id;
       this.ai.push(aiCar);
-      this.aiDriver.register(aiCar, Phaser.Math.FloatBetween(sLow, sHigh));
+      this.aiDriver.register(aiCar, skill);
     }
     this.cars = [...this.humans, ...this.ai];
     this.drs.init(this.cars);
@@ -284,6 +317,7 @@ export class RaceScene extends Phaser.Scene {
     this.enterKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER);
     this.restartKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.R);
     this.escapeKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
+    this.pauseKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.P);
     this.inputReader = new InputReader(this);
 
     this.state = "countdown";
@@ -301,6 +335,39 @@ export class RaceScene extends Phaser.Scene {
       this.scene.start("MenuScene");
       return;
     }
+
+    // P (keyboard) or Start/+ (any connected pad) toggles pause while racing. Allowed only
+    // after countdown is over and before the race ends — pausing the grid countdown or the
+    // results screen would be silly. Resume shifts every gameplay timestamp by the elapsed
+    // pause duration so race time, lap timers, item respawns, missile lifetimes, AI decision
+    // deadlines, and DRS detection gaps don't all jump ahead the moment the player unpauses.
+    // pollPadPauseEdge runs every frame regardless of state to keep its per-pad edge state
+    // fresh — otherwise a button held across a state transition would mis-read on resume.
+    const padPauseEdge = this.inputReader.pollPadPauseEdge();
+    const kbPauseEdge = Phaser.Input.Keyboard.JustDown(this.pauseKey);
+    if (
+      (kbPauseEdge || padPauseEdge) &&
+      (this.state === "racing" || this.state === "paused")
+    ) {
+      if (this.state === "racing") {
+        this.state = "paused";
+        this.pausedAtMs = now;
+        this.hud.showCountdown("PAUSED", "#ffd24a");
+        // Ramp the audio bus to silence so engines + skid loops aren't humming in the
+        // background through the pause.
+        this.audioCtrl.setMuted(true);
+      } else {
+        const pauseDt = now - (this.pausedAtMs ?? now);
+        this.shiftTimestamps(pauseDt);
+        this.pausedAtMs = null;
+        this.state = "racing";
+        this.hud.hideCountdown();
+        this.audioCtrl.setMuted(false);
+      }
+      return;
+    }
+
+    if (this.state === "paused") return;
 
     this.touch.update();
 
@@ -538,23 +605,49 @@ export class RaceScene extends Phaser.Scene {
     if (car.isPlayer) this.flashFor(car, "UNSTUCK", 1200);
   }
 
+  // Shift every wall-clock timestamp the race tracks forward by `dt` ms so a pause doesn't
+  // accelerate any timer. Phaser's `this.time.now` keeps advancing while we sit in the
+  // paused state — this method walks the systems we own and bumps their time anchors so
+  // resume looks like the pause never happened.
+  private shiftTimestamps(dt: number): void {
+    if (dt <= 0) return;
+    this.raceStartedAt += dt;
+    if (this.raceEndedAt > 0) this.raceEndedAt += dt;
+    for (const c of this.cars) {
+      c.currentLapStartMs += dt;
+      c.lastCheckpointMs += dt;
+      if (c.shieldExpiresAt > 0) c.shieldExpiresAt += dt;
+      if (c.useItemAt != null) c.useItemAt += dt;
+      if (c.finishedAtMs != null) c.finishedAtMs += dt;
+    }
+    this.items.shiftTime(dt);
+    this.aiDriver.shiftTime(dt);
+    this.drs.shiftTime(dt);
+  }
+
   private showResults() {
+    // Defer the results panel until every human has crossed the line. While AI is
+    // finishing one by one but the player is still racing, the in-race position panel
+    // already conveys finish status (checkered flag next to each finished name), so a
+    // duplicate compact panel was just visual noise.
+    const anyHumanActive = this.humans.some((h) => h.finishedAtMs == null);
+    if (anyHumanActive) {
+      this.hud.hideResults();
+      return;
+    }
     const sorted = rankedCars(this.cars, this.track);
     const allDone = this.cars.every((c) => c.finishedAtMs != null);
-    // In 2P we keep the compact panel while *any* human is still racing — flip to the full
-    // RACE OVER panel only when both humans have crossed the line. Mirrors the 1P semantics
-    // (where there is only one human anyway).
-    const anyHumanActive = this.humans.some((h) => h.finishedAtMs == null);
-    const compact = anyHumanActive && !allDone;
 
     const lines: string[] = [];
+    // Parallel array of car-livery texture keys for each row line; non-row lines (header,
+    // blank spacers, footer) push null so the Hud's pooled icon sprites at those positions
+    // stay hidden.
+    const rowIcons: (string | null)[] = [];
     let prevCar: Car | null = null;
     for (let i = 0; i < sorted.length; i++) {
       const car = sorted[i];
       const pos = i + 1;
       const isPlayer = car.isPlayer;
-
-      if (compact && car.finishedAtMs == null) break;
 
       let timeCol: string;
       if (car.finishedAtMs == null) {
@@ -571,26 +664,22 @@ export class RaceScene extends Phaser.Scene {
 
       const tag = isPlayer ? " ◂ YOU" : "";
       const nameCol = car.name.padEnd(8);
-
-      if (compact) {
-        const timeColPadded = timeCol.padEnd(10);
-        lines.push(`P${pos} ${nameCol} ${timeColPadded}`);
-      } else {
-        const best = car.bestLapMs != null ? formatRaceTime(car.bestLapMs) : "—";
-        const timeColPadded = timeCol.padEnd(11);
-        lines.push(`P${pos}  ${nameCol}  ${timeColPadded}  best ${best}${tag}`);
-      }
+      const best = car.bestLapMs != null ? formatRaceTime(car.bestLapMs) : "—";
+      const timeColPadded = timeCol.padEnd(11);
+      lines.push(`P${pos}  ${nameCol}  ${timeColPadded}  best ${best}${tag}`);
+      rowIcons.push(car.sprite.texture.key);
 
       prevCar = car;
     }
 
-    if (compact) {
-      this.hud.showResults(lines, true);
-    } else {
-      const header = [allDone ? "RACE OVER" : "RESULTS", ""];
-      const footer = ["", "R to restart · ESC for menu"];
-      this.hud.showResults([...header, ...lines, ...footer], false);
-    }
+    const header = [allDone ? "RACE OVER" : "RESULTS", ""];
+    const footer = ["", "R to restart · ESC for menu"];
+    const iconKeys = [
+      ...header.map(() => null as string | null),
+      ...rowIcons,
+      ...footer.map(() => null as string | null),
+    ];
+    this.hud.showResults([...header, ...lines, ...footer], iconKeys, false);
   }
 
   private updateHud(now: number) {

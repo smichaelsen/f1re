@@ -317,6 +317,6 @@ export interface SurfaceParams {
 
 export const SURFACE_PARAMS: Record<Surface, SurfaceParams> = {
   asphalt: { drag: 0.6, gripFactor: 1.00, color: 0x3a3a3a },
-  grass:   { drag: 1.2, gripFactor: 0.15, color: 0x3d8a3d },
-  gravel:  { drag: 5.0, gripFactor: 0.25, color: 0xb89568 },
+  grass:   { drag: 0.9, gripFactor: 0.15, color: 0x3d8a3d },
+  gravel:  { drag: 3.2, gripFactor: 0.25, color: 0xb89568 },
 };

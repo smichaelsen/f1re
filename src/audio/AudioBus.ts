@@ -97,6 +97,14 @@ export class AudioBus {
     }
   }
 
+  // Ramp the master gain to silence (or back to the config default) for pause-style mutes.
+  // setTargetAtTime over a short tau avoids click artifacts on toggle. Looping engine and
+  // skid sources keep playing in the background; only their audible output is silenced.
+  setMuted(muted: boolean) {
+    const target = muted ? 0 : this.config.masterGain;
+    this.master.gain.setTargetAtTime(target, this.ctx.currentTime, 0.02);
+  }
+
   dispose() {
     for (const s of this.sources) s.dispose();
     this.sources.length = 0;

@@ -136,6 +136,17 @@ export class AIDriver {
     return this.skills.get(car)?.skill ?? 0.7;
   }
 
+  // Shift AI-owned timestamps forward by `dt` ms. Called from RaceScene on pause resume so
+  // overtake commit windows + per-item-noise pickupAt don't read as if huge time passed
+  // (which would force-fire hoarded items the moment the player unpauses).
+  shiftTime(dt: number): void {
+    for (const state of this.skills.values()) {
+      if (state.overtakeMinUntil > 0) state.overtakeMinUntil += dt;
+      if (state.overtakeMaxUntil > 0) state.overtakeMaxUntil += dt;
+      for (const noise of state.itemNoise) noise.pickupAt += dt;
+    }
+  }
+
   // Called when an AI picks up an item. Pushes a noise sample (parallel to car.items) and
   // arms the first eval if the AI was previously empty. Mid-queue pickups don't reset the
   // existing timer — the front item keeps its deadline.

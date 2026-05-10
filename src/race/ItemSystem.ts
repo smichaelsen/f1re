@@ -121,6 +121,16 @@ export class ItemSystem {
     this.updateSeekers(dt, now);
   }
 
+  // Shift every timestamp owned by ItemSystem forward by `dt` ms. Used by RaceScene's
+  // pause-resume path so pickup respawns + projectile lifetimes don't all expire as if
+  // the pause never happened.
+  shiftTime(dt: number): void {
+    for (const p of this.pickups) p.respawnAt += dt;
+    for (const m of this.missiles) m.expiresAt += dt;
+    for (const s of this.seekers) s.expiresAt += dt;
+    for (const o of this.oilSlicks) o.expiresAt += dt;
+  }
+
   useItem(car: Car): void {
     if (car.items.length === 0) return;
     const item = car.items.shift() as Item;

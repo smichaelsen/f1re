@@ -63,6 +63,19 @@ export class DrsManager {
     }
   }
 
+  // Shift DRS-owned timestamps forward by `dt` ms. Called from RaceScene on pause resume
+  // so a scheduled auto-activation (mid AI delay window) doesn't fire the instant unpause.
+  // Also shifts the per-detection-point crossing log so post-pause gap measurements match
+  // the actual physical gap on track rather than including the paused interval.
+  shiftTime(dt: number): void {
+    for (const state of this.states.values()) {
+      if (state.scheduledActivateAt != null) state.scheduledActivateAt += dt;
+    }
+    for (const log of this.detectionLog) {
+      for (const record of log) record.t += dt;
+    }
+  }
+
   // First time any car completes lap 1 → DRS becomes active for the rest of the race.
   // Skipped entirely on tracks without DRS data so we don't broadcast a meaningless message.
   // Subsequent calls are no-ops.
