@@ -11,6 +11,7 @@ import {
   PLAYERS_MAX,
   PLAYERS_MIN,
   TRACK_KEYS,
+  opponentsMaxFor,
   type Difficulty,
   type PlayerCount,
   type TrackKey,
@@ -71,14 +72,19 @@ export function loadMenuPrefs(): MenuPrefs {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return defaults;
     const parsed = JSON.parse(raw) as Partial<MenuPrefs>;
+    const players = parsePlayers(parsed?.players, defaults.players);
+    // Opponents cap is player-count dependent (21 in 1P, 20 in 2P). Clamp to the
+    // absolute max first, then to the per-player effective cap so persisted state stays
+    // self-consistent if the player toggled between modes between sessions.
+    const rawOpponents = clampInt(parsed?.opponents, OPPONENTS_MIN, OPPONENTS_MAX, defaults.opponents);
     return {
       track: parseTrack(parsed?.track, defaults.track),
       difficulty: parseDifficulty(parsed?.difficulty, defaults.difficulty),
       team: parseTeam(parsed?.team, defaults.team),
       team2: parseTeam(parsed?.team2, defaults.team2),
       laps: clampInt(parsed?.laps, LAPS_MIN, LAPS_MAX, defaults.laps),
-      opponents: clampInt(parsed?.opponents, OPPONENTS_MIN, OPPONENTS_MAX, defaults.opponents),
-      players: parsePlayers(parsed?.players, defaults.players),
+      opponents: Math.min(rawOpponents, opponentsMaxFor(players)),
+      players,
       cockpitCam: typeof parsed?.cockpitCam === "boolean" ? parsed.cockpitCam : defaults.cockpitCam,
       name1: sanitizeName(parsed?.name1, defaults.name1),
       name2: sanitizeName(parsed?.name2, defaults.name2),

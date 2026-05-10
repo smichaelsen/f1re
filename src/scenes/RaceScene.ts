@@ -6,7 +6,7 @@ import { Track } from "../entities/Track";
 import { parseTrackData, SURFACE_PARAMS } from "../entities/TrackData";
 import { Hud, formatRaceTime } from "../ui/Hud";
 import { TouchControls } from "../ui/TouchControls";
-import { DIFFICULTIES, LAPS_MAX, LAPS_MIN, OPPONENTS_MAX, OPPONENTS_MIN, PLAYERS_MAX, PLAYERS_MIN } from "./MenuScene";
+import { DIFFICULTIES, LAPS_MAX, LAPS_MIN, OPPONENTS_MIN, PLAYERS_MAX, PLAYERS_MIN, opponentsMaxFor } from "./MenuScene";
 import type { Difficulty, PlayerCount, TrackKey } from "./MenuScene";
 import { recordFastestLap } from "./FastestLaps";
 import { RaceAudioController } from "../audio/RaceAudioController";
@@ -122,7 +122,7 @@ export class RaceScene extends Phaser.Scene {
     this.playerCount = Phaser.Math.Clamp(data.players ?? 1, PLAYERS_MIN, PLAYERS_MAX) as PlayerCount;
     this.difficulty = data.difficulty ?? "normal";
     this.totalLaps = Phaser.Math.Clamp(data.laps ?? 3, LAPS_MIN, LAPS_MAX);
-    this.opponentCount = Phaser.Math.Clamp(data.opponents ?? 3, OPPONENTS_MIN, OPPONENTS_MAX);
+    this.opponentCount = Phaser.Math.Clamp(data.opponents ?? 3, OPPONENTS_MIN, opponentsMaxFor(this.playerCount));
     this.inputSources = (data.inputSources ?? []).slice(0, this.playerCount);
     this.drsModes = data.drsModes ?? loadDrsModes();
     // 2P always uses fit-to-both framing; cockpit-cam is a 1P-only experiment for now.
@@ -178,6 +178,7 @@ export class RaceScene extends Phaser.Scene {
       const car = new Car(this, slot.x, slot.y, ensureCarTexture(this, livery), name, true);
       car.heading = slot.heading;
       car.playerIndex = i;
+      car.teamId = team.id;
       this.humans.push(car);
     }
     this.player = this.humans[0];
@@ -185,20 +186,39 @@ export class RaceScene extends Phaser.Scene {
     const params = DIFFICULTIES[this.difficulty];
     const teamCounts = new Map<string, number>();
     for (const t of humanTeams) teamCounts.set(t.id, (teamCounts.get(t.id) ?? 0) + 1);
-    const aiTeamPool: typeof TEAMS[number][] = [];
-    for (const t of TEAMS) {
-      const slots = 2 - (teamCounts.get(t.id) ?? 0);
-      for (let k = 0; k < slots; k++) aiTeamPool.push(t);
+    // Pair-fill: prefer giving the next AI to a team that already has one seat taken
+    // (human or earlier AI), so existing teams get rounded out to 2 before any fresh
+    // team is opened. Fallback to empty teams when no team-with-one exists. Picked
+    // per-iteration (not pre-shuffled into a pool) because each pick changes which
+    // teams qualify as "partner needed".
+    const pickAiTeam = (): typeof TEAMS[number] => {
+      const partners = TEAMS.filter((t) => (teamCounts.get(t.id) ?? 0) === 1);
+      const fresh = TEAMS.filter((t) => (teamCounts.get(t.id) ?? 0) === 0);
+      const pool = partners.length > 0 ? partners : fresh;
+      return pool[Math.floor(Math.random() * pool.length)];
+    };
+    // Pre-pass: pick all AI teams (teamCounts evolves so pair-fill works), then shuffle.
+    // Without the shuffle, paired teammates end up in adjacent grid slots — visually a
+    // "row of red, row of blue" line-up. Shuffle scatters teammates across the grid.
+    const aiTeams: typeof TEAMS[number][] = [];
+    for (let i = 0; i < this.opponentCount; i++) {
+      const team = pickAiTeam();
+      teamCounts.set(team.id, (teamCounts.get(team.id) ?? 0) + 1);
+      aiTeams.push(team);
     }
-    for (let i = aiTeamPool.length - 1; i > 0; i--) {
+    for (let i = aiTeams.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
-      [aiTeamPool[i], aiTeamPool[j]] = [aiTeamPool[j], aiTeamPool[i]];
+      [aiTeams[i], aiTeams[j]] = [aiTeams[j], aiTeams[i]];
     }
+    // Reset teamCounts to humans-only so the seen-counter in the construction loop
+    // walks from drivers[0] up again per team.
+    teamCounts.clear();
+    for (const t of humanTeams) teamCounts.set(t.id, (teamCounts.get(t.id) ?? 0) + 1);
     for (let i = 0; i < this.opponentCount; i++) {
       // AI cars start behind all humans on the grid: offset by humans.length so a 2-player race
       // puts AI in slots 2..N rather than overlapping P2.
       const slot = gridSlot(this.track, this.humans.length + i);
-      const team = aiTeamPool[i];
+      const team = aiTeams[i];
       const livery = {
         primary: team.primary,
         secondary: team.secondary,
@@ -217,6 +237,7 @@ export class RaceScene extends Phaser.Scene {
         grip: DEFAULT_CAR.grip * Phaser.Math.FloatBetween(pLow, pHigh),
       });
       aiCar.heading = slot.heading;
+      aiCar.teamId = team.id;
       this.ai.push(aiCar);
       this.aiDriver.register(aiCar, Phaser.Math.FloatBetween(sLow, sHigh));
     }

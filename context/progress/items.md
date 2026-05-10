@@ -38,6 +38,12 @@ Defaults: `AI_FIRE_P_FLOOR=0.05`, `AI_FIRE_W_SCORE=0.8`, `AI_FIRE_W_TIME=0.5`. A
 - **Oil** — closest rival behind on race progress. Score = `1 − effD / (1.5 × AI_OIL_BEHIND_RANGE)`, `effD = chaserD × (1 + r1 × factor × 0.3)`. Score 0 if no chaser (last-place AIs eventually force-fire on time term).
 - **Shield** — `null` if already shielded, else `1`. Eagerness is the design intent. AI does NOT peek at other drivers' inventories; held items are private.
 
+**Teammate awareness.** Cars carry a `teamId` (set by `RaceScene` on construction from the team-pool draw). Three utilities apply a friendly-fire penalty `AI_TEAMMATE_PENALTY = 0.15` to the final score when the relevant target is a teammate:
+- **Missile** — penalty when the *nearest car* (the missile's actual lock target) is a teammate.
+- **Seeker** — penalty when the *closest up-track car* is a teammate (the one most likely to enter the seeker's 140u lock radius first). Additionally, "rival ahead" no longer counts teammates, so a leader whose only car ahead is a teammate falls back to the leader-baseline score instead of the rivalAhead=1 score.
+- **Oil** — penalty when the *closest chaser behind* is a teammate (the one who eats the slick).
+Penalty is multiplicative on the score, not a hard veto: patience cap and time-ramp can still force-fire if no other use shows up before expiry. Set to 0.15 — strong enough that a teammate-only target is functionally a "wait" decision in normal play, soft enough that a desperate AI eventually fires.
+
 Race-progress comparison uses `lap × loopLen + centerlineCumS[probe.index]` with modular wrap; "ahead" means dProg ∈ (20, loopLen/2).
 
 ### Inventory (FIFO, 2 slots)

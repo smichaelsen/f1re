@@ -91,6 +91,9 @@ export class Car {
   isPlayer: boolean;
   // 0 = P1, 1 = P2 in 2-player mode; null for AI. Lets HUD flashes/results disambiguate the two humans.
   playerIndex: number | null = null;
+  // Team identity, set by RaceScene at construction. Two cars with equal `teamId` are
+  // teammates; AI item utilities use this to discount friendly-fire (missile/seeker/oil).
+  teamId: string | null = null;
   lap = 0;
   nextCheckpoint = 0;
   // Wall-clock time of the last checkpoint advance. Used by the auto-unstuck watchdog —

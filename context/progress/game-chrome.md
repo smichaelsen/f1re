@@ -22,8 +22,8 @@ Everything outside the track + physics + items: the framing, the HUD, the menus,
 
 ### Teams
 - 11 teams in `src/entities/Team.ts`, each a 2026 F1 nod (`Scuderia Rosso`, `Silver Star`, `Rampage Racing`, `Papaya GP`, `Verde Sport`, `Alpha Bleu`, `Crown Royal`, `Forge Racing`, `Vorsprung Racing`, `Liberty Speed`, `Junior Bulls`). Each team owns `{ id, name, short, primary, secondary, drivers: [string, string] }`. `drivers` are two surname-style strings ≤ 8 chars each; the AI uses them directly so HUD/results show e.g. `WHITNEY`, `BAILEY` instead of the old 3-letter team code.
-- AI cars draw teams from a shuffled pool capped at 2 per team (player counts toward the cap). The first AI on a team picks `drivers[0]`, the second picks `drivers[1]` — no numeric suffixes anymore. Player picks their team in the menu. Random `variant` per car.
-- Opponent count: 1 – 9. With 11 teams × 2-per-cap (minus the player's team), the pool is always large enough to fill the grid.
+- AI cars **pair-fill** teams: each new AI prefers a team that already has one seat occupied (by a human or earlier AI) over an empty team, capped at 2 per team. So a 1-player race pairs the player with one AI on their team before any fresh team is opened; subsequent AIs alternate "open new team" / "fill that team's partner seat". Falls back to empty teams when no partner-able team exists. The first AI on a team picks `drivers[0]`, the second picks `drivers[1]` — no numeric suffixes anymore. Player picks their team in the menu. Random `variant` per car.
+- Opponent count: 1 – 21 in 1P, 1 – 20 in 2P. Total grid capped at 22 cars (11 teams × 2 seats). `opponentsMaxFor(players)` exported from `MenuScene` returns the effective cap; `MenuPrefs.loadMenuPrefs` re-clamps the persisted opponent value against it on load so a user who saved 21-opponents in 1P and switches to 2P next session sees opponents pulled down to 20. Toggling players in the menu also re-clamps live.
 - Menu uses a generic `src/ui/Carousel.ts` (single visible card, ‹/› arrows, `n / N` indicator) — designed to be reused for tracks once that list grows.
 
 ### Race flow + results

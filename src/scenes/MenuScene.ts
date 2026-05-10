@@ -44,10 +44,19 @@ export const DIFFICULTIES: Record<Difficulty, DifficultyParams> = {
 export const LAPS_MIN = 1;
 export const LAPS_MAX = 10;
 export const OPPONENTS_MIN = 1;
-export const OPPONENTS_MAX = 9;
+// Absolute upper bound. Effective max depends on player count via opponentsMaxFor() —
+// 11 teams × 2 seats per team = 22 cars total; subtract humans for the AI cap.
+// Used by the prefs validator (raw clamp) and as the static export consumers may import.
+export const OPPONENTS_MAX = 21;
 export const PLAYERS_MIN = 1;
 export const PLAYERS_MAX = 2;
 export type PlayerCount = 1 | 2;
+
+// Effective opponent cap for a given player count. 1P → 21, 2P → 20.
+// Total grid is capped at 22 cars (11 teams × 2 seats); humans take the rest.
+export function opponentsMaxFor(players: number): number {
+  return players === 2 ? 20 : 21;
+}
 
 const TRACKS: { key: TrackKey; label: string; sub: string }[] = [
   { key: "oval", label: "OVAL", sub: "sweeping bends" },
@@ -600,13 +609,16 @@ export class MenuScene extends Phaser.Scene {
     }, this.settingsObjects);
 
     this.opponentsCounter = this.makeCounter(cx, counterRowY, "OPPONENTS", () => this.opponents, (v) => {
-      this.opponents = Phaser.Math.Clamp(v, OPPONENTS_MIN, OPPONENTS_MAX);
+      this.opponents = Phaser.Math.Clamp(v, OPPONENTS_MIN, opponentsMaxFor(this.players));
       this.savePrefs();
       this.refresh();
     }, this.settingsObjects);
 
     this.playersCounter = this.makeCounter(cx + 260, counterRowY, "PLAYERS (LOCAL)", () => this.players, (v) => {
       this.players = Phaser.Math.Clamp(v, PLAYERS_MIN, PLAYERS_MAX) as PlayerCount;
+      // Re-clamp opponents under the new player count: switching to 2P with opponents=21
+      // would otherwise leave a stale value above the new cap of 20.
+      this.opponents = Phaser.Math.Clamp(this.opponents, OPPONENTS_MIN, opponentsMaxFor(this.players));
       this.savePrefs();
       this.refresh();
     }, this.settingsObjects);

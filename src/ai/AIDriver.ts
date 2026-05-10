@@ -85,6 +85,10 @@ const AI_MISSILE_AHEAD_DOT = 0.3;
 const AI_SEEKER_CURVATURE_MAX = 0.005;
 // Oil: useful when a chaser is close behind on race progress.
 const AI_OIL_BEHIND_RANGE = 260;
+// Friendly-fire penalty. Multiplies the utility score for missile/seeker/oil when the
+// relevant target (nearest car / closest up-track car / closest chaser) is a teammate.
+// Not zero — patience cap and time-ramp can still force-fire if no other use shows up.
+const AI_TEAMMATE_PENALTY = 0.15;
 
 // Overtake — pull off the racing line when stuck on the back of a slower car.
 // Trigger gates: tight gap to a forward-cone rival, near top speed, and faster than the rival
@@ -573,46 +577,70 @@ export class AIDriver {
     const dot = Math.cos(perceivedRel);
     const aheadGate = AI_MISSILE_AHEAD_DOT - s.r3 * n * 0.3;
     const bearingScore = clamp01((dot - aheadGate) / Math.max(0.01, 1 - aheadGate));
-    return rangeScore * bearingScore;
+    // Friendly-fire: missile homes on the nearest non-owner. If the nearest car is a
+    // teammate, almost any missile fired now risks hitting them — drop the score hard.
+    const friendly = this.isTeammate(ai, nearest) ? AI_TEAMMATE_PENALTY : 1;
+    return rangeScore * bearingScore * friendly;
   }
 
   private evalSeekerUtility(ai: Car, s: ItemNoiseSample, n: number): number | null {
     const myProg = this.raceProgress(ai);
     const loopLen = this.trackLoopLength();
-    let rivalAhead = false;
+    let enemyAhead = false;
+    let closestUpTrack: Car | null = null;
+    let closestProg = Infinity;
     for (const c of this.getCars()) {
       if (c === ai) continue;
       const d = (((this.raceProgress(c) - myProg) % loopLen) + loopLen) % loopLen;
-      if (d > 20 && d < loopLen / 2) { rivalAhead = true; break; }
+      if (d > 20 && d < loopLen / 2) {
+        if (!this.isTeammate(ai, c)) enemyAhead = true;
+        if (d < closestProg) { closestProg = d; closestUpTrack = c; }
+      }
     }
-    // Without a rival ahead, fall back to a small baseline so leaders don't sit on seekers.
-    // Low-skill AIs lift the baseline further (more eager to fire blind).
-    const aheadScore = rivalAhead ? 1 : clamp01(0.15 + Math.max(0, s.r1) * n * 0.5);
+    // Without an enemy ahead, fall back to a small baseline so leaders don't sit on seekers.
+    // Low-skill AIs lift the baseline further (more eager to fire blind). Teammates ahead
+    // don't qualify as a rival here — the seeker would just lock the friend.
+    const aheadScore = enemyAhead ? 1 : clamp01(0.15 + Math.max(0, s.r1) * n * 0.5);
     const probe = this.track.probe(ai.x, ai.y);
     const localK = this.track.racingLineCurvature[probe.index] ?? 0;
     const threshold = AI_SEEKER_CURVATURE_MAX * (1 + s.r2 * n * 0.6);
     const curvScore = clamp01(1 - localK / Math.max(1e-6, threshold * 2));
-    return aheadScore * curvScore;
+    // Friendly-fire: seeker spawns 24px ahead and locks the first non-owner inside its
+    // 140u arming radius. If the closest up-track car is a teammate, they're the most
+    // likely target — penalise. If only a teammate is ahead but no enemy at all, the
+    // baseline score plus this penalty keeps the seeker mostly suppressed until patience.
+    const friendly = closestUpTrack && this.isTeammate(ai, closestUpTrack) ? AI_TEAMMATE_PENALTY : 1;
+    return aheadScore * curvScore * friendly;
   }
 
   private evalOilUtility(ai: Car, s: ItemNoiseSample, n: number): number | null {
     const myProg = this.raceProgress(ai);
     const loopLen = this.trackLoopLength();
+    let chaser: Car | null = null;
     let chaserD = Infinity;
     for (const c of this.getCars()) {
       if (c === ai) continue;
       const dProg = (((myProg - this.raceProgress(c)) % loopLen) + loopLen) % loopLen;
       if (dProg > 0 && dProg < loopLen / 2) {
         const eucD = Phaser.Math.Distance.Between(c.x, c.y, ai.x, ai.y);
-        if (eucD < chaserD) chaserD = eucD;
+        if (eucD < chaserD) { chaserD = eucD; chaser = c; }
       }
     }
-    if (!Number.isFinite(chaserD)) return 0;
+    if (!chaser) return 0;
     const effD = chaserD * (1 + s.r1 * n * 0.3);
-    return clamp01(1 - effD / (AI_OIL_BEHIND_RANGE * 1.5));
+    // Friendly-fire: oil drops behind the firing car. If the closest chaser is a teammate,
+    // they're who eats it — penalise.
+    const friendly = this.isTeammate(ai, chaser) ? AI_TEAMMATE_PENALTY : 1;
+    return clamp01(1 - effD / (AI_OIL_BEHIND_RANGE * 1.5)) * friendly;
   }
 
   private evalShieldUtility(ai: Car): number | null {
     return ai.shielded ? null : 1;
+  }
+
+  // Two cars are teammates iff both have the same non-null teamId. Null teamId on either
+  // side falls through to "not a teammate" so unset cars (e.g. tests) just behave as before.
+  private isTeammate(a: Car, b: Car): boolean {
+    return a.teamId != null && a.teamId === b.teamId;
   }
 }
