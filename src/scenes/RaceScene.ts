@@ -29,9 +29,10 @@ import { DustParticles } from "../entities/DustParticles";
 import { SparkParticles } from "../entities/SparkParticles";
 import { DrsAirflow } from "../entities/DrsAirflow";
 import { InputReader, type InputSource } from "../input/InputSource";
-import { defaultDrsModes, loadDrsModes, type DrsMode, type DrsModes } from "../input/DrsMode";
+import { defaultDrsModes, loadDrsModes, type DrsModes } from "../input/DrsMode";
 import { AIDriver } from "../ai/AIDriver";
 import { ITEM_INVENTORY_SIZE, randomItem, type Item } from "../entities/Items";
+import { DrsManager } from "../race/DrsManager";
 
 interface RaceInit {
   trackKey?: TrackKey;
@@ -96,38 +97,10 @@ interface Seeker {
 
 const NO_INPUT: CarInput = { throttle: 0, brake: 0, steer: 0, useItem: false, useDrs: false };
 
-// Eligibility window: chaser within this many ms of the prior crosser at a detection point gets DRS.
-const DRS_GAP_MS = 1000;
-// Auto activation delay after crossing the zone-start gate. Same value for human auto mode and the
-// AI base; AI adds skill-driven jitter on top.
-const DRS_AUTO_DELAY_MS = 200;
-// AI activation timing (ms): base + (1 - skill) * skillSpread + uniform jitter ±jitter.
-const DRS_AI_SKILL_SPREAD = 600;
-const DRS_AI_JITTER = 200;
-
 // Auto-unstuck watchdog. A car that fails to advance a single checkpoint in this many ms gets
 // teleported back to its last gate. 30s catches genuinely wedged cars without making slow but
 // progressing recoveries (post-spin, off-track scrub) trip the watchdog.
 const UNSTUCK_TIMEOUT_MS = 30_000;
-
-interface DetectionRecord {
-  car: Car;
-  t: number;
-}
-
-interface DrsCarState {
-  // Index of the zone whose start gate the car most recently passed while eligible. null while
-  // not currently inside a DRS zone.
-  insideZoneIdx: number | null;
-  // Auto mode: ms timestamp after which DRS becomes active. Cleared when fired or zone ends.
-  scheduledActivateAt: number | null;
-  // Edge-detect "currently inside band" flags, one slot per detection / zone-start / zone-end.
-  // Detections and zones are independent — `Car.drsAvailable` is the single boolean eligibility
-  // flag updated by detection crosses; zones just consult it on entry.
-  prevDetTouching: boolean[];
-  prevStartTouching: boolean[];
-  prevEndTouching: boolean[];
-}
 
 export class RaceScene extends Phaser.Scene {
   // humans[0] is always the primary player (P1). humans.length === 2 in 2P mode.
@@ -188,14 +161,9 @@ export class RaceScene extends Phaser.Scene {
   playerNames: string[] = ["PLAYER 1", "PLAYER 2"];
   inputReader!: InputReader;
   // Per-player DRS auto/manual mode. Index 0 = P1, 1 = P2. AI cars always use auto.
-  drsModes: DrsModes = defaultDrsModes();
-  // Becomes true on the frame the leader completes their first lap. Detection points only grant
-  // eligibility while this is true; crossings logged before then are kept so the first post-enable
-  // chaser can still find a prior crosser to compare against.
-  drsEnabled = false;
-  // Per-zone append-only crossing log. detectionLog[zoneIdx] is ordered by time.
-  drsDetectionLog: DetectionRecord[][] = [];
-  drsState = new Map<Car, DrsCarState>();
+  // Stashed from `init(data)`; passed to DrsManager once at create() time.
+  private drsModes: DrsModes = defaultDrsModes();
+  private drs!: DrsManager;
   escapeKey!: Phaser.Input.Keyboard.Key;
   uiCam!: Phaser.Cameras.Scene2D.Camera;
   private cockpitCam = false;
@@ -250,13 +218,16 @@ export class RaceScene extends Phaser.Scene {
     this.raceStartedAt = 0;
     this.raceEndedAt = 0;
     this.sessionBestLapMs = null;
-    this.drsEnabled = false;
-    this.drsDetectionLog = [];
-    this.drsState.clear();
 
     const raw = this.cache.json.get(`track-${this.trackKey}`);
     this.track = Track.fromData(this, parseTrackData(raw));
     this.aiDriver = new AIDriver(this.track, () => this.cars);
+    this.drs = new DrsManager(
+      this.track,
+      this.drsModes,
+      (car) => this.aiDriver.skillFor(car),
+      (text, ms) => this.flashAll(text, ms),
+    );
 
     this.skidMarks = this.createSkidMarks();
     this.dust = new DustParticles(this);
@@ -322,19 +293,7 @@ export class RaceScene extends Phaser.Scene {
       this.aiDriver.register(aiCar, Phaser.Math.FloatBetween(sLow, sHigh));
     }
     this.cars = [...this.humans, ...this.ai];
-
-    const detCount = this.track.drsDetections.length;
-    const zoneCount = this.track.drsZones.length;
-    this.drsDetectionLog = Array.from({ length: detCount }, () => []);
-    for (const car of this.cars) {
-      this.drsState.set(car, {
-        insideZoneIdx: null,
-        scheduledActivateAt: null,
-        prevDetTouching: new Array(detCount).fill(false),
-        prevStartTouching: new Array(zoneCount).fill(false),
-        prevEndTouching: new Array(zoneCount).fill(false),
-      });
-    }
+    this.drs.init(this.cars);
 
     this.spawnPickups(this.pickupCountForTrack());
 
@@ -828,7 +787,7 @@ export class RaceScene extends Phaser.Scene {
       human.update(dt, input, this.surfaceFeel(human));
       if (active && input.useItem) this.useItem(human);
       this.applyTrackBounds(human);
-      if (active) this.updateDrsForCar(human, input, now);
+      if (active) this.drs.update(human, input, now);
     }
 
     for (const ai of this.ai) {
@@ -840,7 +799,7 @@ export class RaceScene extends Phaser.Scene {
       if (aiActive && this.aiDriver.tickItemUse(ai, now)) {
         this.useItem(ai);
       }
-      if (aiActive) this.updateDrsForCar(ai, input, now);
+      if (aiActive) this.drs.update(ai, input, now);
     }
 
     this.updatePickups();
@@ -944,125 +903,6 @@ export class RaceScene extends Phaser.Scene {
         }
       }
     }
-  }
-
-  // Per-car DRS state machine. Runs once per active car per frame *after* car.update +
-  // applyTrackBounds so wall collisions have already settled the position. Detections and zones
-  // are independent: detection crosses set/clear `Car.drsAvailable`; zone-start arms activation
-  // if available; zone-end clears `drsActive` only (`drsAvailable` persists per spec — "stays
-  // available until next detection point").
-  private updateDrsForCar(car: Car, input: CarInput, now: number) {
-    const detections = this.track.drsDetections;
-    const zones = this.track.drsZones;
-    if (detections.length === 0 && zones.length === 0) return;
-    const state = this.drsState.get(car);
-    if (!state) return;
-
-    for (let d = 0; d < detections.length; d++) {
-      const touching = this.track.gateHit(detections[d].gate, car.x, car.y);
-      const enter = touching && !state.prevDetTouching[d];
-      state.prevDetTouching[d] = touching;
-      if (enter) this.onDrsDetectionCross(car, d, now);
-    }
-
-    for (let z = 0; z < zones.length; z++) {
-      const zone = zones[z];
-      const startTouching = this.track.gateHit(zone.start, car.x, car.y);
-      const endTouching = this.track.gateHit(zone.end, car.x, car.y);
-      const startEnter = startTouching && !state.prevStartTouching[z];
-      const endEnter = endTouching && !state.prevEndTouching[z];
-      state.prevStartTouching[z] = startTouching;
-      state.prevEndTouching[z] = endTouching;
-      if (startEnter) this.onDrsZoneStart(car, state, z, now);
-      if (endEnter) this.onDrsZoneEnd(car, state, z);
-    }
-
-    // Auto activation: fire when the scheduled timestamp elapses.
-    if (state.scheduledActivateAt != null && now >= state.scheduledActivateAt && !car.drsActive) {
-      car.drsActive = true;
-      state.scheduledActivateAt = null;
-    }
-
-    // Manual activation (humans only — AI never sets useDrs). Pressing the DRS key inside any
-    // zone re-arms `drsActive` even after a lift-cancel, as long as eligibility still holds.
-    if (
-      input.useDrs &&
-      car.drsAvailable &&
-      !car.drsActive &&
-      state.insideZoneIdx != null &&
-      this.modeForCar(car) === "manual"
-    ) {
-      car.drsActive = true;
-      state.scheduledActivateAt = null;
-    }
-
-    // Lift / brake cancels DRS. Doesn't clear drsAvailable — chaser can re-trigger via manual
-    // press, and the eligibility flag survives until the next detection cross per spec.
-    if (car.drsActive && (input.throttle === 0 || input.brake > 0)) {
-      car.drsActive = false;
-      state.scheduledActivateAt = null;
-    }
-  }
-
-  private onDrsDetectionCross(car: Car, detIdx: number, now: number) {
-    const log = this.drsDetectionLog[detIdx];
-    // Most recent prior crosser at this detection point, excluding this car. Lap is intentionally
-    // not considered — the gap is a physical time-difference at the line. If a leader is lapping
-    // a backmarker and crosses the detection 0.5s after them, the leader is genuinely 0.5s
-    // behind at the line and gets DRS to chase past, regardless of who's on which lap.
-    let priorT: number | null = null;
-    for (let i = log.length - 1; i >= 0; i--) {
-      const r = log[i];
-      if (r.car === car) continue;
-      priorT = r.t;
-      break;
-    }
-    log.push({ car, t: now });
-
-    // Each detection cross fully overwrites the eligibility flag — "stays available until next
-    // detection point", at which point we re-evaluate. Cleared if gap doesn't qualify or the
-    // scene-wide DRS isn't enabled yet.
-    if (!this.drsEnabled || priorT == null) {
-      car.drsAvailable = false;
-      return;
-    }
-    const gap = now - priorT;
-    car.drsAvailable = gap > 0 && gap <= DRS_GAP_MS;
-  }
-
-  private onDrsZoneStart(car: Car, state: DrsCarState, zoneIdx: number, now: number) {
-    if (!car.drsAvailable) return;
-    state.insideZoneIdx = zoneIdx;
-    if (this.modeForCar(car) === "auto") {
-      state.scheduledActivateAt = now + this.drsAutoActivationDelay(car);
-    }
-  }
-
-  private onDrsZoneEnd(car: Car, state: DrsCarState, zoneIdx: number) {
-    // Only respond to the end gate of the zone we're currently inside. Stops a rogue end-gate
-    // cross (e.g. chicane geometry) from clobbering DRS activated for a different zone.
-    if (state.insideZoneIdx !== zoneIdx) return;
-    car.drsActive = false;
-    state.scheduledActivateAt = null;
-    state.insideZoneIdx = null;
-    // Note: `car.drsAvailable` is intentionally not cleared here. Eligibility persists across
-    // zones until the next detection cross.
-  }
-
-  private modeForCar(car: Car): DrsMode {
-    if (car.playerIndex === 0) return this.drsModes.p1;
-    if (car.playerIndex === 1) return this.drsModes.p2;
-    return "auto";
-  }
-
-  // Auto-activation delay (ms). Humans get a flat 200ms; AI gets a skill-driven base + jitter so
-  // weaker AI react slower and there's some variation across opponents.
-  private drsAutoActivationDelay(car: Car): number {
-    if (car.isPlayer) return DRS_AUTO_DELAY_MS;
-    const skill = this.aiDriver.skillFor(car);
-    const base = DRS_AUTO_DELAY_MS + (1 - skill) * DRS_AI_SKILL_SPREAD;
-    const jitter = (Math.random() * 2 - 1) * DRS_AI_JITTER;
-    return Math.max(0, base + jitter);
   }
 
   // One pickup roughly every PICKUP_SPACING units of track, clamped to [PICKUP_MIN, PICKUP_MAX].
@@ -1538,12 +1378,7 @@ export class RaceScene extends Phaser.Scene {
     car.currentLapStartMs = now;
     car.lap++;
 
-    // First time any car completes lap 1 → DRS becomes active for the rest of the race.
-    // Skipped entirely on tracks without DRS data so we don't broadcast a meaningless message.
-    if (!this.drsEnabled && car.lap >= 1 && this.track.drsZones.length > 0) {
-      this.drsEnabled = true;
-      this.flashAll("DRS ENABLED", 1500);
-    }
+    this.drs.notifyLapComplete();
 
     const winnerAlreadyFinished = this.cars.some((c) => c.finishedAtMs != null);
     if (car.lap >= this.totalLaps || winnerAlreadyFinished) {
@@ -1684,7 +1519,7 @@ export class RaceScene extends Phaser.Scene {
       s.hud.setTime(elapsed);
       s.hud.setBest(s.car.bestLapMs);
       s.hud.setItem(s.car.items, s.useKey);
-      const manual = this.modeForCar(s.car) === "manual";
+      const manual = this.drs.modeFor(s.car) === "manual";
       const drsState = s.car.drsActive
         ? "active"
         : s.car.drsAvailable
