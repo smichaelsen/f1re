@@ -2,10 +2,12 @@ import { Car } from "../entities/Car";
 import { Track } from "../entities/Track";
 import { type PositionRow } from "../ui/Hud";
 
-// Race-order ranking. Active cars sort by progress (laps × cps + crossed-this-lap), tiebreaking
-// on distance to the next checkpoint so two cars on the same checkpoint resolve smoothly. Finished
-// cars sort ahead of active ones, themselves ranked by lap count then finish time — handles
-// lapped cars finishing later.
+// Race-order ranking. Primary key is cumulative progress (laps × cps + crossed-this-lap), so a
+// lapped car can never out-rank a car that has actually completed more checkpoints — even if the
+// lapped car gets `finishedAtMs` set first by the winner-already-finished branch. Tiebreakers, in
+// order: finished cars beat active cars at the same progress (winner edges out a still-rolling car
+// on the same lap), earlier finish wins between two finished cars at the same progress, and
+// distance-to-next-checkpoint resolves two active cars sharing the same gate.
 export function rankedCars(cars: readonly Car[], track: Track): Car[] {
   const ncp = track.checkpoints.length;
   const rows = cars.map((c) => {
@@ -16,13 +18,12 @@ export function rankedCars(cars: readonly Car[], track: Track): Car[] {
     return { car: c, progress, distToNext };
   });
   rows.sort((a, b) => {
+    if (b.progress !== a.progress) return b.progress - a.progress;
     if (a.car.finishedAtMs != null && b.car.finishedAtMs != null) {
-      if (a.car.lap !== b.car.lap) return b.car.lap - a.car.lap;
       return a.car.finishedAtMs - b.car.finishedAtMs;
     }
     if (a.car.finishedAtMs != null) return -1;
     if (b.car.finishedAtMs != null) return 1;
-    if (b.progress !== a.progress) return b.progress - a.progress;
     return a.distToNext - b.distToNext;
   });
   return rows.map((r) => r.car);

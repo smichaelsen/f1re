@@ -30,6 +30,7 @@ Everything outside the track + physics + items: the framing, the HUD, the menus,
 - **Grid lineup.** All cars (player included) start at staggered grid slots **before** the start/finish line. `RaceScene.startGridSlot(index)` walks `40 + index * 40` units back along the centerline from `startIndex` and offsets ±30 laterally on alternating sides. Player gets slot 0 (pole), AIs fill slots `1..opponentCount`. Geometry comes from `gridSlotBehindStart` so the lineup stays on-track even where the start straight curves.
 - Race continues after the first car finishes; finished cars idle (`NO_INPUT`) but stay in the world.
 - Lapped cars finish on the next CP0 crossing after the winner.
+- **Standings sort key is cumulative progress, not finish status.** `rankedCars()` orders by `lap × ncp + crossedThisLap` first, with finished status only as a tiebreaker on equal progress. Earlier code put every finished car above every active car, which let a lapped car that crossed CP0 right after the winner pop into P2 until the real P2 finished — the lapped car was on a lower lap but flagged finished by the winner-already-finished branch in `updateLapTracking`.
 - Results overlay: compact bottom-right while the player is still racing → flips to a full center "RACE OVER" once the player finishes.
 - Format: P1 absolute total time; P2..PN interval to the car ahead (`+s.cc` or `+m:ss.cc` for time, `+N LAP(S)` for lap-down).
 - Best lap per car shown in full mode. Monospace font for column alignment. Panel auto-sizes to text.
