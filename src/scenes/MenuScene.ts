@@ -42,7 +42,7 @@ export const DIFFICULTIES: Record<Difficulty, DifficultyParams> = {
 };
 
 export const LAPS_MIN = 1;
-export const LAPS_MAX = 10;
+export const LAPS_MAX = 20;
 export const OPPONENTS_MIN = 1;
 // Absolute upper bound. Effective max depends on player count via opponentsMaxFor() —
 // 11 teams × 2 seats per team = 22 cars total; subtract humans for the AI cap.
