@@ -866,7 +866,7 @@ export class MenuScene extends Phaser.Scene {
     }
 
     this.fastestLapsHeader = this.addFastestLaps(this.add
-      .text(cx, 380, " #   TIME      DRIVER", {
+      .text(cx, 380, fastestLapsRowFormat("#", "TIME", "DRIVER"), {
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
         fontSize: "16px",
         color: "#888888",
@@ -925,10 +925,7 @@ export class MenuScene extends Phaser.Scene {
         row.setText("");
         continue;
       }
-      const pos = String(i + 1).padStart(2, " ");
-      const time = formatLapMs(entry.ms).padEnd(9, " ");
-      const name = entry.name;
-      row.setText(` ${pos}   ${time}  ${name}`);
+      row.setText(fastestLapsRowFormat(String(i + 1), formatLapMs(entry.ms), entry.name));
       row.setColor(entry.isPlayer ? "#ffd24a" : "#ffffff");
     }
     this.fastestLapsEmpty?.setVisible(list.length === 0);
@@ -1242,4 +1239,18 @@ function formatLapMs(ms: number): string {
   const s = Math.floor(totalSec % 60);
   const cs = Math.floor((ms % 1000) / 10);
   return `${m}:${s.toString().padStart(2, "0")}.${cs.toString().padStart(2, "0")}`;
+}
+
+// Tabular formatter for the fastest-laps board. Uses fixed column widths so every row
+// renders to the exact same character count — a `setOrigin(0.5, 0)` text then centers
+// every row at the same screen X regardless of name/time content.
+const FASTEST_LAPS_POS_W = 2;
+const FASTEST_LAPS_TIME_W = 8;
+const FASTEST_LAPS_NAME_W = 8;
+
+function fastestLapsRowFormat(pos: string, time: string, name: string): string {
+  const p = pos.slice(0, FASTEST_LAPS_POS_W).padStart(FASTEST_LAPS_POS_W, " ");
+  const t = time.slice(0, FASTEST_LAPS_TIME_W).padEnd(FASTEST_LAPS_TIME_W, " ");
+  const n = name.slice(0, FASTEST_LAPS_NAME_W).padEnd(FASTEST_LAPS_NAME_W, " ");
+  return ` ${p}   ${t}   ${n}`;
 }
