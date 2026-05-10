@@ -7,7 +7,7 @@ Driving model, collisions, race-flow timing.
 ### Driving model
 - Top-down arcade physics: throttle, brake, steer, grip, drag, boost, spin, shield.
 - Per-frame surface feel: `RaceScene.surfaceFeel(car)` reads the surface under each of the 4 corners and passes `{ drag, gripFactor }` to `car.update`. Both `drag` and `gripFactor` are **averaged** across the 4 corners — penalties scale linearly with corner count (1 corner on grass → 25% of grass's penalty, 2 → 50%, 4 → 100%).
-- **Subtle slipstream/draft.** `Car.draft` (default 1.0) multiplies accel and max speed. `RaceScene.computeDraft(car)` runs each frame: a chasing car within 20–110u behind a leader, ≤22u lateral, with heading dot ≥ 0.7, and speed ≥ 60 gets up to a +5% bump that ramps linearly with proximity and falls off with lateral offset. Tuned to be felt only on long straights when actually tucked into another car's wake.
+- **Subtle slipstream/draft.** `Car.draft` (default 1.0) multiplies accel and max speed. `RaceScene.computeDraft(car)` runs each frame: a chasing car within 20–220u behind a leader, ≤22u lateral, with heading dot ≥ 0.7, and speed ≥ 60 gets up to a +5% bump that ramps linearly with proximity and falls off with lateral offset. Tuned to be felt only on long straights when actually tucked into another car's wake.
 
 ### Grip-recovery model
 - `Car.gripFactor` ∈ [0..1] is a persistent multiplier on the car's traction. It scales **lateral grip, throttle accel, and brake force** together — same factor on all three, since the underlying physical limit is tire-to-surface friction in every direction. Final lateral exponent = `BASE_GRIP (4.0) × cfg.grip × car.gripFactor`; throttle and brake are multiplied by `gripFactor` directly.

@@ -23,6 +23,12 @@ interface AISkillState {
   // AI's misjudgement of *this specific item instance* is frozen until consumed —
   // reads like a personality trait rather than per-tick jitter.
   itemNoise: ItemNoiseSample[];
+  // Overtake state. side ∈ {-1, 0, 1} where 0 = not currently attempting an overtake.
+  // commitMinUntil locks the side once chosen so AIs don't flicker on noise; commitMaxUntil
+  // is a hard timeout so a doomed attempt eventually terminates even if abort gates miss.
+  overtakeSide: number;
+  overtakeMinUntil: number;
+  overtakeMaxUntil: number;
 }
 
 const AIM_CHUNK_SIZE = 6;
@@ -80,6 +86,24 @@ const AI_SEEKER_CURVATURE_MAX = 0.005;
 // Oil: useful when a chaser is close behind on race progress.
 const AI_OIL_BEHIND_RANGE = 260;
 
+// Overtake — pull off the racing line when stuck on the back of a slower car.
+// Trigger gates: tight gap to a forward-cone rival, near top speed, and faster than the rival
+// (closing-speed delta). Side is committed for at least COMMIT_MIN_MS so steering doesn't
+// flicker on noise; aborts kick in once committed (rival pulled away, brake zone, off-track).
+// High-skill AIs pick the inside of the next corner and use the full abort logic; low-skill
+// AIs pick a random valid side and just ride out the timer. Off-track guard probes the
+// candidate side and flips (or cancels) when the chosen offset would put the AI off asphalt.
+const AI_OVERTAKE_RANGE = 80;
+const AI_OVERTAKE_AHEAD_DOT = 0.8;
+const AI_OVERTAKE_SPEED_FRAC = 0.9;
+const AI_OVERTAKE_CLOSING_DELTA = 18;
+const AI_OVERTAKE_OFFSET_FRAC = 0.55;
+const AI_OVERTAKE_COMMIT_MIN_MS = 1200;
+const AI_OVERTAKE_COMMIT_MAX_MS = 3500;
+const AI_OVERTAKE_BRAKE_ABORT_FRAC = 0.92;
+const AI_OVERTAKE_NEXT_CORNER_SCAN = 300;
+const AI_OVERTAKE_SKILL_THRESHOLD = 0.6;
+
 const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
 
 export class AIDriver {
@@ -93,7 +117,15 @@ export class AIDriver {
   ) {}
 
   register(car: Car, skill: number): void {
-    this.skills.set(car, { skill, aimOffset: 0, chunk: -1, itemNoise: [] });
+    this.skills.set(car, {
+      skill,
+      aimOffset: 0,
+      chunk: -1,
+      itemNoise: [],
+      overtakeSide: 0,
+      overtakeMinUntil: 0,
+      overtakeMaxUntil: 0,
+    });
   }
 
   skillFor(car: Car): number {
@@ -140,7 +172,7 @@ export class AIDriver {
     return false;
   }
 
-  input(ai: Car): CarInput {
+  input(ai: Car, now: number): CarInput {
     const bestIdx = this.closestCenterlineIdx(ai);
     const speed = ai.speed;
 
@@ -149,12 +181,16 @@ export class AIDriver {
       if (this.track.surfaceAt(c.x, c.y) === "asphalt") asphaltCorners++;
     }
 
+    const targetSpeed = this.cornerSpeed(bestIdx, ai.config.maxSpeed);
+
     // Off-track recovery: with 3+ wheels off the asphalt, abandon the racing line and
     // aim at the bisector of (track-tangent forward, perpendicular-toward-centerline) —
     // a 45° forward-angled rejoin. Switches back to the normal waypoint aim once at
-    // least 2 wheels are back on asphalt.
+    // least 2 wheels are back on asphalt. Also clears any in-progress overtake — no
+    // point committing to a pull-out while you're still rejoining.
     let desiredAng: number;
     if (asphaltCorners < 2) {
+      this.clearOvertake(ai);
       const probe = this.track.probe(ai.x, ai.y);
       const pts = this.track.centerline;
       const n = pts.length;
@@ -170,13 +206,13 @@ export class AIDriver {
       const ay = fy - probe.ny;
       desiredAng = Math.atan2(ay, ax);
     } else {
+      this.updateOvertake(ai, bestIdx, targetSpeed, now);
       const target = this.aimAtRacingLine(ai, bestIdx);
       desiredAng = Math.atan2(target.y - ai.y, target.x - ai.x);
     }
     const diff = Phaser.Math.Angle.Wrap(desiredAng - ai.heading);
     const steer = Phaser.Math.Clamp(diff * 1.8, -1, 1);
 
-    const targetSpeed = this.cornerSpeed(bestIdx, ai.config.maxSpeed);
     let throttle = 1;
     let brake = 0;
     if (speed > targetSpeed * AI_BRAKE_DEADZONE) {
@@ -276,7 +312,15 @@ export class AIDriver {
       state.chunk = currentChunk;
       state.aimOffset = this.sampleAimOffset(state.skill);
     }
-    if (state.aimOffset === 0) return aim;
+
+    // Overtake offset overrides skill drift so the pull-out is visible. Same perpendicular
+    // basis at the aim point; sign carries the chosen side. When not in an overtake, fall
+    // through to the existing skill drift behaviour.
+    let off = state.aimOffset;
+    if (state.overtakeSide !== 0) {
+      off = state.overtakeSide * (this.track.width / 2) * AI_OVERTAKE_OFFSET_FRAC;
+    }
+    if (off === 0) return aim;
 
     const prev = pts[(aimIdx - 1 + n) % n];
     const next = pts[(aimIdx + 1) % n];
@@ -285,7 +329,7 @@ export class AIDriver {
     const len = Math.hypot(dx, dy) || 1;
     const nx = -dy / len;
     const ny = dx / len;
-    return { x: aim.x + nx * state.aimOffset, y: aim.y + ny * state.aimOffset };
+    return { x: aim.x + nx * off, y: aim.y + ny * off };
   }
 
   // Walk the racing line forward. At each point, compute the corner-entry speed allowed by
@@ -293,6 +337,143 @@ export class AIDriver {
   // corner" via v_now = √(v_corner² + 2 · brake · arc_length_to_point). Return the minimum
   // such threshold across the scan window. So AI cruises at maxSpeed until a corner enters
   // its actual braking horizon — no more crawling 800px before a tight bend.
+  private clearOvertake(ai: Car): void {
+    const state = this.skills.get(ai);
+    if (!state) return;
+    state.overtakeSide = 0;
+    state.overtakeMinUntil = 0;
+    state.overtakeMaxUntil = 0;
+  }
+
+  // Overtake state machine. Run each frame on-track; manages start/abort/timeout.
+  // - Trigger: rival in a forward cone within AI_OVERTAKE_RANGE, own speed ≥ 90% maxSpeed,
+  //   own speed ≥ rival.speed + closing-delta. Closing-delta scales with skill — stronger
+  //   AIs commit at smaller speed advantages.
+  // - Side choice: high-skill picks inside of next corner; low-skill random. Off-track guard
+  //   probes the proposed offset point and flips (or cancels) if it lands off asphalt.
+  // - Commit: side held for at least COMMIT_MIN_MS — no flicker on noise. Hard timeout at
+  //   COMMIT_MAX_MS so a doomed pull-out terminates.
+  // - Abort (high-skill only): rival no longer ahead within range, brake zone entered, or
+  //   chosen side becomes off-track. Low-skill AIs ride out the timer.
+  private updateOvertake(ai: Car, bestIdx: number, targetSpeed: number, now: number): void {
+    const state = this.skills.get(ai);
+    if (!state) return;
+    const skill = state.skill;
+    const skilled = skill >= AI_OVERTAKE_SKILL_THRESHOLD;
+
+    if (state.overtakeSide !== 0) {
+      // Hard timeout always applies; commit-min holds the side regardless of abort signals.
+      if (now >= state.overtakeMaxUntil) {
+        this.clearOvertake(ai);
+      } else if (now >= state.overtakeMinUntil) {
+        if (skilled) {
+          const rival = this.findOvertakeTarget(ai);
+          const brakeZone = targetSpeed < ai.config.maxSpeed * AI_OVERTAKE_BRAKE_ABORT_FRAC;
+          const offTrackNow = !this.overtakeSideClear(ai, bestIdx, state.overtakeSide);
+          if (!rival || brakeZone || offTrackNow) {
+            this.clearOvertake(ai);
+          }
+        }
+      }
+      return;
+    }
+
+    // Not currently in an overtake — evaluate trigger.
+    if (ai.speed < ai.config.maxSpeed * AI_OVERTAKE_SPEED_FRAC) return;
+    // Skip when about to brake — pulling out into a corner is a lap-time disaster.
+    if (targetSpeed < ai.config.maxSpeed * AI_OVERTAKE_BRAKE_ABORT_FRAC) return;
+    const rival = this.findOvertakeTarget(ai);
+    if (!rival) return;
+    // Skill-modulated closing delta: stronger AIs need less of an advantage to commit.
+    const closingDelta = AI_OVERTAKE_CLOSING_DELTA * (1.4 - 0.6 * skill);
+    if (ai.speed < rival.speed + closingDelta) return;
+
+    // Pick a candidate side. High-skill: inside of next corner; low-skill: random.
+    let primary: number;
+    if (skilled) {
+      const sgn = this.nextCornerSign(bestIdx, AI_OVERTAKE_NEXT_CORNER_SCAN);
+      // Inside-of-corner side relative to (-dy, dx) left-perpendicular basis used in
+      // aimAtRacingLine. Net cross > 0 = right turn on screen → inside on right → -1.
+      primary = sgn > 0 ? -1 : sgn < 0 ? 1 : (Math.random() < 0.5 ? -1 : 1);
+    } else {
+      primary = Math.random() < 0.5 ? -1 : 1;
+    }
+    let chosen = 0;
+    if (this.overtakeSideClear(ai, bestIdx, primary)) chosen = primary;
+    else if (this.overtakeSideClear(ai, bestIdx, -primary)) chosen = -primary;
+    if (chosen === 0) return;
+
+    state.overtakeSide = chosen;
+    state.overtakeMinUntil = now + AI_OVERTAKE_COMMIT_MIN_MS;
+    state.overtakeMaxUntil = now + AI_OVERTAKE_COMMIT_MAX_MS;
+  }
+
+  // Find the rival the AI is most plausibly trying to overtake: tightest gap inside a
+  // forward cone within AI_OVERTAKE_RANGE. Returns null if nobody qualifies.
+  private findOvertakeTarget(ai: Car): Car | null {
+    const fx = Math.cos(ai.heading);
+    const fy = Math.sin(ai.heading);
+    let best: Car | null = null;
+    let bestD = Infinity;
+    for (const c of this.getCars()) {
+      if (c === ai) continue;
+      const dx = c.x - ai.x;
+      const dy = c.y - ai.y;
+      const d = Math.hypot(dx, dy);
+      if (d > AI_OVERTAKE_RANGE || d < 1e-3) continue;
+      const dot = (dx * fx + dy * fy) / d;
+      if (dot < AI_OVERTAKE_AHEAD_DOT) continue;
+      if (d < bestD) { bestD = d; best = c; }
+    }
+    return best;
+  }
+
+  // Off-track guard. side ∈ {-1, +1}. Returns true if the perpendicular offset on the
+  // chosen side lands on asphalt. Sampled at the AI's current position projected onto
+  // the local racing-line normal — that's where the body ends up after the swerve.
+  private overtakeSideClear(ai: Car, bestIdx: number, side: number): boolean {
+    const pts = this.track.centerline;
+    const n = pts.length;
+    const prev = pts[(bestIdx - 1 + n) % n];
+    const next = pts[(bestIdx + 1) % n];
+    const dx = next.x - prev.x;
+    const dy = next.y - prev.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len;
+    const ny = dx / len;
+    const off = side * (this.track.width / 2) * AI_OVERTAKE_OFFSET_FRAC;
+    const sx = ai.x + nx * off;
+    const sy = ai.y + ny * off;
+    return this.track.surfaceAt(sx, sy) === "asphalt";
+  }
+
+  // Sign of net turning over scanDist of arc length on the racing line, starting at bestIdx.
+  // Positive = clockwise on screen (right turn in y-down), negative = counter-clockwise.
+  // 0 if the segment is effectively straight or the loop is too short.
+  private nextCornerSign(bestIdx: number, scanDist: number): number {
+    const rl = this.track.racingLine.length === this.track.centerline.length
+      ? this.track.racingLine
+      : this.track.centerline;
+    const n = rl.length;
+    if (n < 3) return 0;
+    let acc = 0;
+    let netCross = 0;
+    for (let step = 0; step < n; step++) {
+      const i = (bestIdx + step) % n;
+      const j = (bestIdx + step + 1) % n;
+      const k = (bestIdx + step + 2) % n;
+      const ax = rl[j].x - rl[i].x;
+      const ay = rl[j].y - rl[i].y;
+      const bx = rl[k].x - rl[j].x;
+      const by = rl[k].y - rl[j].y;
+      netCross += ax * by - ay * bx;
+      acc += Math.hypot(ax, ay);
+      if (acc >= scanDist) break;
+    }
+    if (Math.abs(netCross) < 1) return 0;
+    return netCross > 0 ? 1 : -1;
+  }
+
   private cornerSpeed(bestIdx: number, maxSpeed: number): number {
     const curv = this.track.racingLineCurvature;
     if (curv.length === 0) return maxSpeed;

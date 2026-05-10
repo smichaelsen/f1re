@@ -581,7 +581,7 @@ export class RaceScene extends Phaser.Scene {
     this.updateAudio();
   }
 
-  // Subtle slipstream: when a car sits ~20-110u behind another car, roughly aligned and
+  // Subtle slipstream: when a car sits ~20-220u behind another car, roughly aligned and
   // laterally close, give it a small accel + top-speed bump that ramps with proximity.
   // Max effect at the close end of the range; zero at the edges or off-axis.
   private computeDraft(car: Car): number {
@@ -595,13 +595,14 @@ export class RaceScene extends Phaser.Scene {
       const dx = other.x - car.x;
       const dy = other.y - car.y;
       const along = dx * fx + dy * fy;
-      if (along < 20 || along > 110) continue;
+      if (along < 20 || along > 220) continue;
       const lat = Math.abs(-dx * fy + dy * fx);
       if (lat > 22) continue;
       const headingDot = Math.cos(other.heading - car.heading);
       if (headingDot < 0.7) continue;
-      // Linear ramp: 1.0 at along=110, peak at along=20.
-      const proximity = 1 - (along - 20) / 90;
+      // Linear ramp: zero at along=220, peak at along=20. Long stretch so a chasing car
+      // feels the wake from several car lengths back, even if the bonus there is small.
+      const proximity = 1 - (along - 20) / 200;
       const lateralFalloff = 1 - lat / 22;
       const draft = 1.0 + 0.05 * proximity * lateralFalloff;
       if (draft > best) best = draft;
@@ -792,7 +793,7 @@ export class RaceScene extends Phaser.Scene {
 
     for (const ai of this.ai) {
       const aiActive = ai.finishedAtMs == null;
-      const input = aiActive ? this.aiDriver.input(ai) : NO_INPUT;
+      const input = aiActive ? this.aiDriver.input(ai, now) : NO_INPUT;
       ai.audioThrottle = input.throttle;
       ai.update(dt, input, this.surfaceFeel(ai));
       this.applyTrackBounds(ai);
