@@ -306,7 +306,7 @@ export class MenuScene extends Phaser.Scene {
 
     const renderTeam = (scene: Phaser.Scene, container: Phaser.GameObjects.Container, team: Team) => {
       const car = scene.add
-        .sprite(0, -18, ensureCarTexture(scene, { primary: team.primary, secondary: team.secondary, variant: team.variant }))
+        .sprite(0, -18, ensureCarTexture(scene, { primary: team.primary, secondary: team.secondary, variant: team.variant, tertiary: team.tertiary }))
         .setScale(2.4);
       const name = scene.add
         .text(0, 22, team.name.toUpperCase(), {

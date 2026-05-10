@@ -190,6 +190,7 @@ export class RaceScene extends Phaser.Scene {
         primary: team.primary,
         secondary: team.secondary,
         variant: team.variant,
+        tertiary: team.tertiary,
       };
       const name = this.playerNames[i] ?? `PLAYER ${i + 1}`;
       const car = new Car(this, slot.x, slot.y, ensureCarTexture(this, livery), name, true, applyTeamPerf(team.perf));
@@ -230,7 +231,7 @@ export class RaceScene extends Phaser.Scene {
       const t = Phaser.Math.Clamp((driverSkill - DRIVER_SKILL_MIN) / driverRange, 0, 1);
       return sLow + t * (sHigh - sLow);
     };
-    const aiEntries: { team: typeof TEAMS[number]; seat: number; skill: number; qualiScore: number }[] = [];
+    const aiEntries: { team: Team; seat: number; skill: number; qualiScore: number }[] = [];
     for (let i = 0; i < this.opponentCount; i++) {
       const team = pickAiTeam();
       // teamCounts already has humans pre-loaded, so a team with 1 human gets seat=1 for
@@ -257,6 +258,7 @@ export class RaceScene extends Phaser.Scene {
         primary: team.primary,
         secondary: team.secondary,
         variant: team.variant,
+        tertiary: team.tertiary,
       };
       const driverIdx = Math.min(seat, team.drivers.length - 1);
       const aiName = team.drivers[driverIdx];

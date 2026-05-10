@@ -28,6 +28,9 @@ export interface Team {
   // accent placement so all team cars are visually identical (mirrors how F1 teams ship one
   // livery for both drivers). Replaces the previous per-car random variant.
   variant: CarDesign;
+  // Optional third livery color, currently only used by the "bull" variant (Rampage).
+  // Other teams omit it entirely; CarSprite ignores it for non-bull variants.
+  tertiary?: number;
   perf: TeamPerf;
 }
 
@@ -41,14 +44,14 @@ export interface Team {
 export const TEAMS = [
   { id: "rosso",     name: "Scuderia Rosso",     short: "ROS", primary: 0xed1c24, secondary: 0xffd700, drivers: ["BARETTI", "MARCHESI"], driverSkills: [0.81, 0.97], variant: "wingtips", perf: { topSpeed: 1.06, accel: 1.06, grip: 1.06 } },
   { id: "silver",    name: "Silver Star",        short: "SVR", primary: 0xb8b8b8, secondary: 0x00d2be, drivers: ["SCHMIDT", "KAISER"],   driverSkills: [0.86, 0.97], variant: "spine",    perf: { topSpeed: 1.10, accel: 1.04, grip: 1.02 } },
-  { id: "rampage",   name: "Rampage Racing",     short: "RAM", primary: 0x1e3a8a, secondary: 0xffd200, drivers: ["HUNTER", "KANE"],      driverSkills: [0.99, 0.82], variant: "sidepods", perf: { topSpeed: 1.06, accel: 1.08, grip: 1.04 } },
+  { id: "rampage",   name: "Rampage Racing",     short: "RAM", primary: 0x1e3a8a, secondary: 0xffd200, tertiary: 0xdc2626, drivers: ["HUNTER", "KANE"],      driverSkills: [0.99, 0.82], variant: "bull",     perf: { topSpeed: 1.06, accel: 1.08, grip: 1.04 } },
   { id: "papaya",    name: "Papaya GP",          short: "PAP", primary: 0xff8000, secondary: 0x47c7fc, drivers: ["CHESTER", "BAILEY"],   driverSkills: [0.91, 0.82], variant: "sidepods", perf: { topSpeed: 1.02, accel: 1.06, grip: 1.10 } },
   { id: "verde",     name: "Verde Sport",        short: "VRD", primary: 0x006f3a, secondary: 0xff80c0, drivers: ["COSTA", "SOUSA"],      driverSkills: [0.47, 0.50], variant: "nose",     perf: { topSpeed: 0.92, accel: 0.94, grip: 0.96 } },
   { id: "alpha",     name: "Alpha Bleu",         short: "ALP", primary: 0x0078d4, secondary: 0xfa0537, drivers: ["DUPONT", "GIRAUD"],    driverSkills: [0.60, 0.69], variant: "spine",    perf: { topSpeed: 0.96, accel: 0.94, grip: 0.96 } },
   { id: "crown",     name: "Crown Royal",        short: "CRW", primary: 0x0070d2, secondary: 0xffffff, drivers: ["WHITNEY", "BRADLEY"],  driverSkills: [0.71, 0.59], variant: "wingtips", perf: { topSpeed: 1.04, accel: 0.98, grip: 0.94 } },
   { id: "forge",     name: "Forge Racing",       short: "FRG", primary: 0xe5e5e5, secondary: 0xb70a1c, drivers: ["IRONS", "STEEL"],      driverSkills: [0.80, 0.60], variant: "wingtips", perf: { topSpeed: 1.00, accel: 0.98, grip: 1.00 } },
   { id: "vorsprung", name: "Vorsprung Racing",   short: "VOR", primary: 0xb70a1c, secondary: 0x222222, drivers: ["GRUBER", "KOENIG"],    driverSkills: [0.69, 0.80], variant: "sidepods", perf: { topSpeed: 0.96, accel: 1.00, grip: 1.04 } },
-  { id: "liberty",   name: "Liberty Speed",      short: "LBR", primary: 0x0a3161, secondary: 0xb22234, drivers: ["MONROE", "JACKSON"],   driverSkills: [0.51, 0.48], variant: "spine",    perf: { topSpeed: 0.98, accel: 0.92, grip: 0.90 } },
+  { id: "liberty",   name: "Liberty Speed",      short: "LBR", primary: 0xc0c0c0, secondary: 0x111111, drivers: ["MONROE", "JACKSON"],   driverSkills: [0.51, 0.48], variant: "spine",    perf: { topSpeed: 0.98, accel: 0.92, grip: 0.90 } },
   { id: "junior",    name: "Junior Bulls",       short: "JUN", primary: 0x4a90e2, secondary: 0xff0000, drivers: ["COLT", "DASH"],        driverSkills: [0.81, 0.64], variant: "nose",     perf: { topSpeed: 0.98, accel: 1.04, grip: 1.00 } },
 ] as const satisfies readonly Team[];
 

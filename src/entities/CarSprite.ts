@@ -1,12 +1,15 @@
 import Phaser from "phaser";
 
-export const CAR_DESIGN_VARIANTS = ["nose", "sidepods", "spine", "wingtips"] as const;
+export const CAR_DESIGN_VARIANTS = ["nose", "sidepods", "spine", "wingtips", "bull"] as const;
 export type CarDesign = (typeof CAR_DESIGN_VARIANTS)[number];
 
 export interface Livery {
   primary: number;
   secondary: number;
   variant: CarDesign;
+  // Optional third accent color. Only the "bull" variant reads it (nose paint); other
+  // variants ignore it. Kept optional so existing two-color teams stay unchanged.
+  tertiary?: number;
 }
 
 const W = 44;
@@ -17,7 +20,8 @@ const SILVER = 0x888888;
 const WHITE = 0xffffff;
 
 export function carTextureKey(livery: Livery): string {
-  return `car_${livery.primary.toString(16)}_${livery.secondary.toString(16)}_${livery.variant}`;
+  const base = `car_${livery.primary.toString(16)}_${livery.secondary.toString(16)}_${livery.variant}`;
+  return livery.tertiary !== undefined ? `${base}_${livery.tertiary.toString(16)}` : base;
 }
 
 export function ensureCarTexture(scene: Phaser.Scene, livery: Livery): string {
@@ -52,6 +56,19 @@ export function ensureCarTexture(scene: Phaser.Scene, livery: Livery): string {
     case "wingtips":
       g.fillRect(0, 9, 5, 2);
       g.fillRect(38, 9, 6, 2);
+      break;
+    case "bull":
+      // Three-color split mirroring the Red Bull RB livery. Sprite faces +x (driver's
+      // visor sits on the right of the helmet circle, so front = high x): the slim
+      // x=24..38 extension is the nose cone, the wider x=5..16 block behind the cockpit
+      // is the engine cover. Nose painted secondary (yellow); engine cover front half
+      // (cockpit-side, high x) secondary, back half (rear-wing-side, low x) tertiary (red).
+      g.fillRect(24, 8, 14, 4);
+      g.fillRect(11, 7, 5, 6);
+      if (livery.tertiary !== undefined) {
+        g.fillStyle(livery.tertiary, 1);
+        g.fillRect(5, 7, 6, 6);
+      }
       break;
   }
 
