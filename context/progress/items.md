@@ -55,8 +55,11 @@ Race-progress comparison uses `lap × loopLen + centerlineCumS[probe.index]` wit
 ### Shield visibility
 - Pulsing cyan ring (`Car.SHIELD_COLOR = 0x88ccff`) drawn around any car with `shielded = true`. Sin-based alpha pulse (0.45–0.85), 26px radius, drawn on a per-car `shieldRing` Graphics owned by `Car`.
 - `Car.spin(seconds)` returns `boolean` — `false` when the hit was absorbed by the shield. Existing missile + oil collision paths consume the return.
-- `RaceScene.spawnShieldFlash(car)` plays a one-shot expanding cyan ring (r 18→56, alpha 1→0, stroke 4→1, ease cubic-out, 380ms) at the car position; player gets a "BLOCKED!" HUD flash.
+- `ItemSystem.spawnShieldFlash(car)` plays a one-shot expanding cyan ring (r 18→56, alpha 1→0, stroke 4→1, ease cubic-out, 380ms) at the car position; player gets a "BLOCKED!" HUD flash via the `flashFor` callback wired by `RaceScene`.
 - `uiCam.ignore(g)` applied to the runtime flash graphics so it lives in the world, not the HUD layer.
+
+### Module structure
+All pickup, missile, seeker, oil-slick, shield-flash, and `useItem` logic lives in `src/race/ItemSystem.ts`. `RaceScene` constructs it once after `uiCam` exists, calls `spawn()` once, then `update(dt, now)` per frame and `useItem(car)` on player/AI fire. Constructor takes `scene`, `track`, `uiCam`, `cars`, `aiDriver`, an `audioBus` getter (nullable, set later), and a `flashFor(car, text, ms)` callback so HUD routing stays in the scene.
 
 ## Open Questions
 - None active.
