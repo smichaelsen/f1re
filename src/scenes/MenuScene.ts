@@ -15,6 +15,7 @@ import {
 } from "../input/InputSource";
 import { loadDrsModes, saveDrsModes, type DrsMode, type DrsModes } from "../input/DrsMode";
 import { TextInput } from "../ui/TextInput";
+import { FASTEST_LAPS_PER_TRACK, loadFastestLaps, type FastestLapEntry } from "./FastestLaps";
 import {
   DEFAULT_NAME_1,
   DEFAULT_NAME_2,
@@ -97,7 +98,7 @@ interface InputSlot {
 
 const INPUT_DEBUG_ROWS = 4;
 
-type View = "main" | "settings";
+type View = "main" | "settings" | "fastestLaps";
 
 const CONTENT_HEIGHT = 1030;
 
@@ -118,6 +119,7 @@ export class MenuScene extends Phaser.Scene {
   view: View = "main";
   mainObjects: Phaser.GameObjects.GameObject[] = [];
   settingsObjects: Phaser.GameObjects.GameObject[] = [];
+  fastestLapsObjects: Phaser.GameObjects.GameObject[] = [];
 
   teamLabel!: Phaser.GameObjects.Text;
   teamLabel2!: Phaser.GameObjects.Text;
@@ -130,9 +132,17 @@ export class MenuScene extends Phaser.Scene {
   playersCounter!: CounterButtons;
   startBtn!: Phaser.GameObjects.Text;
   settingsBtn!: Phaser.GameObjects.Text;
+  fastestLapsBtn!: Phaser.GameObjects.Text;
   inspectBtn!: Phaser.GameObjects.Text;
   doneBtn!: Phaser.GameObjects.Text;
+  fastestLapsDoneBtn!: Phaser.GameObjects.Text;
   hintText!: Phaser.GameObjects.Text;
+  // Fastest-laps view state.
+  fastestLapsTrack: TrackKey = "oval";
+  fastestLapsTrackButtons: { key: TrackKey; bg: Phaser.GameObjects.Rectangle; label: Phaser.GameObjects.Text }[] = [];
+  fastestLapsRows: Phaser.GameObjects.Text[] = [];
+  fastestLapsEmpty: Phaser.GameObjects.Text | null = null;
+  fastestLapsHeader: Phaser.GameObjects.Text | null = null;
 
   // Input source assignment (2P only). Persisted via localStorage so the same pad keeps its
   // slot across sessions; reassign by clicking a slot.
@@ -164,6 +174,9 @@ export class MenuScene extends Phaser.Scene {
     this.difficultyButtons = [];
     this.mainObjects = [];
     this.settingsObjects = [];
+    this.fastestLapsObjects = [];
+    this.fastestLapsTrackButtons = [];
+    this.fastestLapsRows = [];
     this.inputSlots = [];
     this.padDebugRows = [];
 
@@ -181,6 +194,8 @@ export class MenuScene extends Phaser.Scene {
     this.cockpitCam = prefs.cockpitCam;
     this.name1 = prefs.name1;
     this.name2 = prefs.name2;
+    // Fastest-laps view defaults to the currently selected track for a sensible first read.
+    this.fastestLapsTrack = prefs.track;
 
     const cam = this.cameras.main;
     const cx = cam.width / 2;
@@ -207,6 +222,7 @@ export class MenuScene extends Phaser.Scene {
     this.buildInputSlots(cx);
     this.buildPadDebugPanel(cx);
     this.buildSettingsView(cx);
+    this.buildFastestLapsView(cx);
 
     this.hintText = this.add
       .text(cx, cam.height - 30, "click to pick · ENTER to start", {
@@ -249,7 +265,7 @@ export class MenuScene extends Phaser.Scene {
     });
     this.input.keyboard?.on("keydown-ESC", () => {
       if (this.isAnyNameInputFocused()) return;
-      if (this.view === "settings") this.setView("main");
+      if (this.view !== "main") this.setView("main");
     });
 
     // Click outside a focused input → blur (commits the value via the TextInput's own blur path).
@@ -391,8 +407,8 @@ export class MenuScene extends Phaser.Scene {
     this.startBtn.on("pointerover", () => this.startBtn.setStyle({ backgroundColor: "#ffe680" }));
     this.startBtn.on("pointerout", () => this.startBtn.setStyle({ backgroundColor: "#ffd24a" }));
 
-    this.settingsBtn = this.addMain(this.add
-      .text(cx - 110, 695, "SETTINGS", {
+    this.fastestLapsBtn = this.addMain(this.add
+      .text(cx - 110, 695, "FASTEST LAPS", {
         fontFamily: "system-ui, sans-serif",
         fontSize: "16px",
         color: "#aaaaaa",
@@ -400,9 +416,9 @@ export class MenuScene extends Phaser.Scene {
       })
       .setOrigin(0.5)
       .setInteractive({ useHandCursor: true }));
-    this.settingsBtn.on("pointerdown", () => this.setView("settings"));
-    this.settingsBtn.on("pointerover", () => this.settingsBtn.setColor("#ffd24a"));
-    this.settingsBtn.on("pointerout", () => this.settingsBtn.setColor("#aaaaaa"));
+    this.fastestLapsBtn.on("pointerdown", () => this.setView("fastestLaps"));
+    this.fastestLapsBtn.on("pointerover", () => this.fastestLapsBtn.setColor("#ffd24a"));
+    this.fastestLapsBtn.on("pointerout", () => this.fastestLapsBtn.setColor("#aaaaaa"));
 
     this.inspectBtn = this.addMain(this.add
       .text(cx + 110, 695, "INSPECT TRACK", {
@@ -416,6 +432,22 @@ export class MenuScene extends Phaser.Scene {
     this.inspectBtn.on("pointerdown", () => this.inspect());
     this.inspectBtn.on("pointerover", () => this.inspectBtn.setColor("#ffd24a"));
     this.inspectBtn.on("pointerout", () => this.inspectBtn.setColor("#888888"));
+
+    // SETTINGS lives in the top-right corner of the main view as a small text link. Pinned with
+    // setScrollFactor(0) so it stays visible while the menu camera scrolls vertically.
+    this.settingsBtn = this.addMain(this.add
+      .text(this.cameras.main.width - 30, 30, "SETTINGS", {
+        fontFamily: "system-ui, sans-serif",
+        fontSize: "14px",
+        color: "#888888",
+        fontStyle: "bold",
+      })
+      .setOrigin(1, 0)
+      .setScrollFactor(0)
+      .setInteractive({ useHandCursor: true }));
+    this.settingsBtn.on("pointerdown", () => this.setView("settings"));
+    this.settingsBtn.on("pointerover", () => this.settingsBtn.setColor("#ffd24a"));
+    this.settingsBtn.on("pointerout", () => this.settingsBtn.setColor("#888888"));
   }
 
   // Two press-to-join slots, only visible in 2P main view (positioning handled in
@@ -794,6 +826,115 @@ export class MenuScene extends Phaser.Scene {
     });
   }
 
+  // Fastest-laps board view. Track buttons + monospaced top-10 list (humans coloured yellow,
+  // AI white). Re-rendered every time the view becomes visible so newly-recorded laps appear
+  // without restarting the menu.
+  private buildFastestLapsView(cx: number) {
+    this.addFastestLaps(this.add
+      .text(cx, 230, "FASTEST LAPS", {
+        fontFamily: "system-ui, sans-serif",
+        fontSize: "32px",
+        color: "#ffffff",
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5));
+
+    const tw = 200;
+    const th = 48;
+    const tgap = 16;
+    const totalW = TRACKS.length * tw + (TRACKS.length - 1) * tgap;
+    let tx = cx - totalW / 2 + tw / 2;
+    for (const t of TRACKS) {
+      const bg = this.addFastestLaps(this.add
+        .rectangle(tx, 310, tw, th, 0x222222)
+        .setStrokeStyle(2, 0x444444)
+        .setInteractive({ useHandCursor: true }));
+      const label = this.addFastestLaps(this.add
+        .text(tx, 310, t.label, {
+          fontFamily: "system-ui, sans-serif",
+          fontSize: "16px",
+          color: "#ffffff",
+          fontStyle: "bold",
+        })
+        .setOrigin(0.5));
+      bg.on("pointerdown", () => {
+        this.fastestLapsTrack = t.key;
+        this.refreshFastestLaps();
+      });
+      this.fastestLapsTrackButtons.push({ key: t.key, bg, label });
+      tx += tw + tgap;
+    }
+
+    this.fastestLapsHeader = this.addFastestLaps(this.add
+      .text(cx, 380, " #   TIME      DRIVER", {
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+        fontSize: "16px",
+        color: "#888888",
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5, 0));
+
+    for (let i = 0; i < FASTEST_LAPS_PER_TRACK; i++) {
+      const row = this.addFastestLaps(this.add
+        .text(cx, 410 + i * 28, "", {
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+          fontSize: "18px",
+          color: "#ffffff",
+        })
+        .setOrigin(0.5, 0));
+      this.fastestLapsRows.push(row);
+    }
+
+    this.fastestLapsEmpty = this.addFastestLaps(this.add
+      .text(cx, 480, "No laps recorded yet.", {
+        fontFamily: "system-ui, sans-serif",
+        fontSize: "18px",
+        color: "#888888",
+      })
+      .setOrigin(0.5, 0)
+      .setVisible(false));
+
+    this.fastestLapsDoneBtn = this.addFastestLaps(this.add
+      .text(cx, 760, "DONE", {
+        fontFamily: "system-ui, sans-serif",
+        fontSize: "24px",
+        color: "#1a1a1a",
+        backgroundColor: "#ffd24a",
+        padding: { x: 28, y: 10 },
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true }));
+    this.fastestLapsDoneBtn.on("pointerdown", () => this.setView("main"));
+    this.fastestLapsDoneBtn.on("pointerover", () => this.fastestLapsDoneBtn.setStyle({ backgroundColor: "#ffe680" }));
+    this.fastestLapsDoneBtn.on("pointerout", () => this.fastestLapsDoneBtn.setStyle({ backgroundColor: "#ffd24a" }));
+  }
+
+  private refreshFastestLaps() {
+    for (const b of this.fastestLapsTrackButtons) {
+      const selected = b.key === this.fastestLapsTrack;
+      b.bg.setStrokeStyle(selected ? 3 : 2, selected ? 0xffd24a : 0x444444);
+      b.bg.setFillStyle(selected ? 0x2a2a2a : 0x1d1d1d);
+      b.label.setColor(selected ? "#ffd24a" : "#ffffff");
+    }
+    const list: FastestLapEntry[] = loadFastestLaps()[this.fastestLapsTrack] ?? [];
+    for (let i = 0; i < this.fastestLapsRows.length; i++) {
+      const row = this.fastestLapsRows[i];
+      const entry = list[i];
+      if (!entry) {
+        row.setText("");
+        continue;
+      }
+      const pos = String(i + 1).padStart(2, " ");
+      const time = formatLapMs(entry.ms).padEnd(9, " ");
+      const name = entry.name;
+      row.setText(` ${pos}   ${time}  ${name}`);
+      row.setColor(entry.isPlayer ? "#ffd24a" : "#ffffff");
+    }
+    this.fastestLapsEmpty?.setVisible(list.length === 0);
+    this.fastestLapsHeader?.setVisible(list.length > 0);
+  }
+
   private addMain<T extends Phaser.GameObjects.GameObject>(obj: T): T {
     this.mainObjects.push(obj);
     return obj;
@@ -804,19 +945,28 @@ export class MenuScene extends Phaser.Scene {
     return obj;
   }
 
+  private addFastestLaps<T extends Phaser.GameObjects.GameObject>(obj: T): T {
+    this.fastestLapsObjects.push(obj);
+    return obj;
+  }
+
   private setView(view: View) {
     this.view = view;
-    const onMain = view === "main";
-    if (onMain) {
+    if (view !== "settings") {
       this.nameInput1?.blur();
       this.nameInput2?.blur();
     }
-    for (const o of this.mainObjects) (o as unknown as { setVisible: (v: boolean) => void }).setVisible(onMain);
-    for (const o of this.settingsObjects) (o as unknown as { setVisible: (v: boolean) => void }).setVisible(!onMain);
-    this.hintText?.setText(onMain ? "click to pick · ENTER to start" : "click to adjust · ESC to back");
+    const setAll = (list: Phaser.GameObjects.GameObject[], visible: boolean) => {
+      for (const o of list) (o as unknown as { setVisible: (v: boolean) => void }).setVisible(visible);
+    };
+    setAll(this.mainObjects, view === "main");
+    setAll(this.settingsObjects, view === "settings");
+    setAll(this.fastestLapsObjects, view === "fastestLaps");
+    this.hintText?.setText(view === "main" ? "click to pick · ENTER to start" : "click to adjust · ESC to back");
     // P2 carousel is in `mainObjects`, so the loop above unconditionally shows it on main —
     // re-apply the players-aware layout to hide it again when in 1P mode.
-    if (onMain) this.applyPlayersLayout();
+    if (view === "main") this.applyPlayersLayout();
+    if (view === "fastestLaps") this.refreshFastestLaps();
     // Re-run the highlight + per-player visibility logic so the DRS picker selection state and
     // 1P/2P-aware row visibility reflect current data after the bulk visibility toggle above.
     this.refresh();
@@ -1080,7 +1230,16 @@ export class MenuScene extends Phaser.Scene {
     const cx = cam.width / 2;
     const cy = cam.height;
     this.hintText?.setPosition(cx, cy - 30);
+    this.settingsBtn?.setPosition(cam.width - 30, 30);
     cam.setBounds(0, 0, cam.width, CONTENT_HEIGHT);
     cam.scrollY = Phaser.Math.Clamp(cam.scrollY, 0, Math.max(0, CONTENT_HEIGHT - cam.height));
   }
+}
+
+function formatLapMs(ms: number): string {
+  const totalSec = ms / 1000;
+  const m = Math.floor(totalSec / 60);
+  const s = Math.floor(totalSec % 60);
+  const cs = Math.floor((ms % 1000) / 10);
+  return `${m}:${s.toString().padStart(2, "0")}.${cs.toString().padStart(2, "0")}`;
 }

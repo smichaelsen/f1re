@@ -8,6 +8,7 @@ import { Hud, formatRaceTime, type PositionRow } from "../ui/Hud";
 import { TouchControls } from "../ui/TouchControls";
 import { DIFFICULTIES, LAPS_MAX, LAPS_MIN, OPPONENTS_MAX, OPPONENTS_MIN, PLAYERS_MAX, PLAYERS_MIN } from "./MenuScene";
 import type { Difficulty, PlayerCount, TrackKey } from "./MenuScene";
+import { recordFastestLap } from "./FastestLaps";
 import { AudioBus } from "../audio/AudioBus";
 import { EngineSound } from "../audio/EngineSound";
 import { SkidSound } from "../audio/SkidSound";
@@ -1716,6 +1717,14 @@ export class RaceScene extends Phaser.Scene {
     } else if (beatPersonal) {
       this.flashFor(car, "PERSONAL BEST", 1500);
     }
+    // Every completed lap is a candidate for the all-time top-10 board. The recorder caps
+    // the list itself, so we don't need to gate on "fast enough" here.
+    recordFastestLap(this.trackKey, {
+      name: car.name,
+      ms: lapMs,
+      isPlayer: car.isPlayer,
+      recordedAt: Date.now(),
+    });
     car.currentLapStartMs = now;
     car.lap++;
 
