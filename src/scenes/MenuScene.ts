@@ -1073,6 +1073,36 @@ export class MenuScene extends Phaser.Scene {
     this.cheatsDoneBtn.on("pointerdown", () => this.setView("main"));
     this.cheatsDoneBtn.on("pointerover", () => this.cheatsDoneBtn.setStyle({ backgroundColor: "#ffe680" }));
     this.cheatsDoneBtn.on("pointerout", () => this.cheatsDoneBtn.setStyle({ backgroundColor: "#ffd24a" }));
+
+    // Secondary action: clears every toggle, drops the unlock flag, and bounces back to main —
+    // hiding the CHEATS link until the user types CHEATZPLS again. Styled as a quieter text
+    // link so it doesn't compete with DONE for visual weight.
+    const disableBtn = this.addCheats(this.add
+      .text(cx, ty + 80, "DISABLE CHEATS", {
+        fontFamily: "system-ui, sans-serif",
+        fontSize: "14px",
+        color: "#888888",
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true }));
+    disableBtn.on("pointerdown", () => this.disableAllCheats());
+    disableBtn.on("pointerover", () => disableBtn.setColor("#ff6688"));
+    disableBtn.on("pointerout", () => disableBtn.setColor("#888888"));
+  }
+
+  private disableAllCheats() {
+    this.cheats = {
+      unlocked: false,
+      diamondArmor: false,
+      offRoadWheels: false,
+      mazeSpin: false,
+      hammerTime: false,
+      deathmatch: false,
+    };
+    saveMenuCheats(this.cheats);
+    this.refreshCheatToggles();
+    this.setView("main");
   }
 
   // Transient unlock-confirmation banner. Lives as a single text object pinned to the camera so it

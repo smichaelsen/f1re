@@ -572,6 +572,14 @@ export class RaceScene extends Phaser.Scene {
     }
   }
 
+  // True when at least one cheat effect is active for this race. Used to gate the fastest-laps
+  // recorder so cheat runs never write to the persistent board. `unlocked` is intentionally
+  // excluded — that flag just means the cheats menu is reachable, not that any cheat is on.
+  private anyCheatActive(): boolean {
+    const c = this.cheats;
+    return c.diamondArmor || c.offRoadWheels || c.mazeSpin || c.hammerTime || c.deathmatch;
+  }
+
   private surfaceFeel(car: Car): SurfaceFeel {
     // OFF ROAD WHEELS cheat: humans always read asphalt feel regardless of which surface their
     // corners are on. Stays opt-in to humans only — cheats never apply to AI.
@@ -630,14 +638,18 @@ export class RaceScene extends Phaser.Scene {
     } else if (beatPersonal) {
       this.flashFor(car, "PERSONAL BEST", 1500);
     }
-    // Every completed lap is a candidate for the all-time top-10 board. The recorder caps
-    // the list itself, so we don't need to gate on "fast enough" here.
-    recordFastestLap(this.trackKey, {
-      name: car.name,
-      ms: lapMs,
-      isPlayer: car.isPlayer,
-      recordedAt: Date.now(),
-    });
+    // Every completed lap is a candidate for the all-time top-10 board, *unless* any cheat is
+    // active for this race — cheating runs are session-only fun and never persist to the board.
+    // Gate on the cheat-on check rather than per-car so AI laps in a cheat race are also
+    // excluded (the player could otherwise farm a clean AI lap on a cheat-armed run).
+    if (!this.anyCheatActive()) {
+      recordFastestLap(this.trackKey, {
+        name: car.name,
+        ms: lapMs,
+        isPlayer: car.isPlayer,
+        recordedAt: Date.now(),
+      });
+    }
     car.currentLapStartMs = now;
     car.lap++;
 
