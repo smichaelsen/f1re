@@ -37,6 +37,7 @@
   - `f1re.menu.prefs` — main menu + settings selections (track, difficulty, P1/P2 team, laps, opponents, players). Owned by `src/scenes/MenuPrefs.ts`. Each loader validates fields against the current enums and falls back to defaults on schema mismatch, so renamed tracks / removed teams degrade gracefully.
   - `f1re.input.assignments` — 2P input pairings (which keyboard / pad maps to P1 vs P2). Owned by `src/input/InputSource.ts`.
   - `f1re.drs.mode` — per-player DRS activation mode (`auto` / `manual`). Owned by `src/input/DrsMode.ts`.
+  - `f1re.cheats` — cheat unlock + per-cheat toggles (`unlocked`, `diamondArmor`, `offRoadWheels`, `mazeSpin`). Owned by `src/scenes/MenuCheats.ts`. Cheats reach `RaceScene` via the `cheats` field on the scene-start payload; only forwarded when `unlocked === true`.
 - New persisted prefs follow the same pattern: a single typed key, a `loadX()` that validates and falls back to defaults on any parse error, a `saveX()` that swallows quota / privacy errors. No central preference store.
 - **Track JSON** in `public/tracks/`: source of truth for geometry, surfaces, runoff, patches. Loaded by Phaser's JSON cache, parsed by `parseTrackData`, instantiated as `Track`.
 - **Procedural textures** generated in `BootScene.preload` (cars, pickups). Live in Phaser's texture cache.

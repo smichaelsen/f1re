@@ -94,6 +94,10 @@ export class ItemSystem {
     private aiDriver: AIDriver,
     private getAudioBus: () => AudioBus | null,
     private flashFor: (car: Car, text: string, ms: number) => void,
+    // Fired once per item-applied spin (i.e. only when `Car.spin()` returned true — shielded
+    // hits don't trigger). Used by RaceScene's DEATHMATCH cheat to permanently disable throttle
+    // on hit. Defaults to no-op so non-cheat installs don't need to thread anything.
+    private onSpin: (car: Car) => void = () => {},
   ) {}
 
   spawn(): void {
@@ -297,6 +301,7 @@ export class ItemSystem {
           if (c.spin(1.2)) {
             const bus = this.getAudioBus();
             if (bus) playExplosionSfx(bus, c.x, c.y);
+            this.onSpin(c);
           } else {
             this.spawnShieldFlash(c);
           }
@@ -415,6 +420,7 @@ export class ItemSystem {
           if (c.spin(1.2)) {
             const bus = this.getAudioBus();
             if (bus) playExplosionSfx(bus, c.x, c.y);
+            this.onSpin(c);
           } else {
             this.spawnShieldFlash(c);
           }
@@ -459,6 +465,7 @@ export class ItemSystem {
           if (c.spin(0.9)) {
             const bus = this.getAudioBus();
             if (bus) playSpinoutSfx(bus, c.x, c.y);
+            this.onSpin(c);
           } else {
             this.spawnShieldFlash(c);
           }

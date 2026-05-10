@@ -19,6 +19,7 @@ Detailed progress lives in topic files under `context/progress/`. Read the files
 - [Audio (bus, positional sources, engine)](progress/audio.md)
 - [DRS (zones, detection points, activation)](progress/drs.md)
 - [Car catalog (per-team perf profiles)](progress/car-catalog.md)
+- [Cheats (CHEATZPLS unlock + diamond armor / off-road wheels / mazespin / hammertime / deathmatch)](progress/cheats.md)
 
 ## Current Phase
 - Phase 2 of runoff system shipped. Per-segment runoff widths now available (see `progress/track-rendering.md`).

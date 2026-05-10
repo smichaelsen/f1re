@@ -66,6 +66,10 @@ export class Car {
   spinTimer = 0;
   shielded = false;
   shieldExpiresAt = 0;
+  // DEATHMATCH cheat flag. Set externally (RaceScene) when this car is hit by an item under
+  // the deathmatch cheat. While true, longitudinal throttle accel is gated off in `update()`,
+  // so the car can still rotate, brake, drift, and be pushed — it just can't power up again.
+  dead = false;
   // Slipstream multiplier applied to accel + max speed. 1.0 = no draft. Set per-frame by RaceScene.
   draft = 1.0;
   // Throttle the audio layer should treat as "commanded right now". Set by RaceScene
@@ -181,7 +185,7 @@ export class Car {
       // gripFactor gates longitudinal traction too: throttle and brake both rely on tire-to-surface friction,
       // so a low-grip surface (grass / fresh recovery) loses acceleration and braking authority together.
       const traction = this.gripFactor;
-      if (input.throttle > 0) {
+      if (input.throttle > 0 && !this.dead) {
         this.vx += fx * cfg.accel * input.throttle * boost * this.draft * traction * dt;
         this.vy += fy * cfg.accel * input.throttle * boost * this.draft * traction * dt;
       }

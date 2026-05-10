@@ -24,6 +24,13 @@ import {
   sanitizeName,
   saveMenuPrefs,
 } from "./MenuPrefs";
+import {
+  CHEAT_CODE,
+  defaultMenuCheats,
+  loadMenuCheats,
+  saveMenuCheats,
+  type MenuCheats,
+} from "./MenuCheats";
 
 export type TrackKey = "oval" | "stadium" | "temple-of-speed" | "champions-wall";
 export type Difficulty = "easy" | "normal" | "hard";
@@ -107,7 +114,7 @@ interface InputSlot {
 
 const INPUT_DEBUG_ROWS = 4;
 
-type View = "main" | "settings" | "fastestLaps";
+type View = "main" | "settings" | "fastestLaps" | "cheats";
 
 const CONTENT_HEIGHT = 1180;
 
@@ -129,6 +136,16 @@ export class MenuScene extends Phaser.Scene {
   mainObjects: Phaser.GameObjects.GameObject[] = [];
   settingsObjects: Phaser.GameObjects.GameObject[] = [];
   fastestLapsObjects: Phaser.GameObjects.GameObject[] = [];
+  cheatsObjects: Phaser.GameObjects.GameObject[] = [];
+
+  cheats: MenuCheats = defaultMenuCheats();
+  // Rolling buffer of last CHEAT_CODE.length uppercase letters typed on the main view. Compared
+  // against CHEAT_CODE on every keystroke; on match we flip `cheats.unlocked` and clear it.
+  private cheatBuffer: string = "";
+  cheatsBtn: Phaser.GameObjects.Text | null = null;
+  cheatsDoneBtn!: Phaser.GameObjects.Text;
+  cheatToggles: { key: keyof Pick<MenuCheats, "diamondArmor" | "offRoadWheels" | "mazeSpin" | "hammerTime" | "deathmatch">; bg: Phaser.GameObjects.Rectangle; label: Phaser.GameObjects.Text }[] = [];
+  cheatUnlockFlash: Phaser.GameObjects.Text | null = null;
 
   teamLabel!: Phaser.GameObjects.Text;
   teamLabel2!: Phaser.GameObjects.Text;
@@ -187,10 +204,14 @@ export class MenuScene extends Phaser.Scene {
     this.mainObjects = [];
     this.settingsObjects = [];
     this.fastestLapsObjects = [];
+    this.cheatsObjects = [];
+    this.cheatToggles = [];
     this.fastestLapsTrackButtons = [];
     this.fastestLapsRows = [];
     this.inputSlots = [];
     this.padDebugRows = [];
+    this.cheatBuffer = "";
+    this.cheats = loadMenuCheats();
 
     this.assignments = loadAssignments();
     this.inputReader = new InputReader(this);
@@ -235,6 +256,8 @@ export class MenuScene extends Phaser.Scene {
     this.buildPadDebugPanel(cx);
     this.buildSettingsView(cx);
     this.buildFastestLapsView(cx);
+    this.buildCheatsView(cx);
+    this.buildCheatUnlockFlash(cx);
 
     this.hintText = this.add
       .text(cx, cam.height - 30, "click to pick · ENTER to start", {
@@ -266,6 +289,7 @@ export class MenuScene extends Phaser.Scene {
         e.preventDefault?.();
         return;
       }
+      this.feedCheatBuffer(e);
     });
     this.input.keyboard?.on("keydown-ENTER", () => {
       if (this.isAnyNameInputFocused()) return;
@@ -491,6 +515,23 @@ export class MenuScene extends Phaser.Scene {
     this.settingsBtn.on("pointerdown", () => this.setView("settings"));
     this.settingsBtn.on("pointerover", () => this.settingsBtn.setColor("#ffd24a"));
     this.settingsBtn.on("pointerout", () => this.settingsBtn.setColor("#888888"));
+
+    // CHEATS link sits directly below SETTINGS, same right-aligned anchor. Stays hidden until
+    // the unlock buffer matches CHEAT_CODE; refreshCheatsBtn() owns visibility.
+    this.cheatsBtn = this.addMain(this.add
+      .text(this.cameras.main.width - 30, 52, "CHEATS", {
+        fontFamily: "system-ui, sans-serif",
+        fontSize: "14px",
+        color: "#ff6688",
+        fontStyle: "bold",
+      })
+      .setOrigin(1, 0)
+      .setScrollFactor(0)
+      .setInteractive({ useHandCursor: true })
+      .setVisible(false));
+    this.cheatsBtn.on("pointerdown", () => this.setView("cheats"));
+    this.cheatsBtn.on("pointerover", () => this.cheatsBtn?.setColor("#ffd24a"));
+    this.cheatsBtn.on("pointerout", () => this.cheatsBtn?.setColor("#ff6688"));
   }
 
   // Two press-to-join slots, only visible in 2P settings view (positioning handled in
@@ -978,8 +1019,142 @@ export class MenuScene extends Phaser.Scene {
     this.fastestLapsHeader?.setVisible(list.length > 0);
   }
 
+  private buildCheatsView(cx: number) {
+    this.addCheats(this.add
+      .text(cx, 230, "CHEATS", {
+        fontFamily: "system-ui, sans-serif",
+        fontSize: "32px",
+        color: "#ff6688",
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5));
+
+    // Names only. Effects are intentionally undocumented in the UI — the user wants players
+    // to discover them on track. Don't add tooltips or sub-text here.
+    const toggles: { key: "diamondArmor" | "offRoadWheels" | "mazeSpin" | "hammerTime" | "deathmatch"; label: string }[] = [
+      { key: "diamondArmor", label: "DIAMOND ARMOR" },
+      { key: "offRoadWheels", label: "OFF ROAD WHEELS" },
+      { key: "mazeSpin", label: "MAZESPIN" },
+      { key: "hammerTime", label: "HAMMERTIME" },
+      { key: "deathmatch", label: "DEATHMATCH" },
+    ];
+    const tw = 420;
+    const th = 56;
+    let ty = 320;
+    for (const t of toggles) {
+      const bg = this.addCheats(this.add
+        .rectangle(cx, ty, tw, th, 0x222222)
+        .setStrokeStyle(2, 0x444444)
+        .setInteractive({ useHandCursor: true }));
+      const label = this.addCheats(this.add
+        .text(cx, ty, t.label, {
+          fontFamily: "system-ui, sans-serif",
+          fontSize: "22px",
+          color: "#ffffff",
+          fontStyle: "bold",
+        })
+        .setOrigin(0.5));
+      bg.on("pointerdown", () => this.toggleCheat(t.key));
+      this.cheatToggles.push({ key: t.key, bg, label });
+      ty += th + 14;
+    }
+
+    this.cheatsDoneBtn = this.addCheats(this.add
+      .text(cx, ty + 24, "DONE", {
+        fontFamily: "system-ui, sans-serif",
+        fontSize: "24px",
+        color: "#1a1a1a",
+        backgroundColor: "#ffd24a",
+        padding: { x: 28, y: 10 },
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true }));
+    this.cheatsDoneBtn.on("pointerdown", () => this.setView("main"));
+    this.cheatsDoneBtn.on("pointerover", () => this.cheatsDoneBtn.setStyle({ backgroundColor: "#ffe680" }));
+    this.cheatsDoneBtn.on("pointerout", () => this.cheatsDoneBtn.setStyle({ backgroundColor: "#ffd24a" }));
+  }
+
+  // Transient unlock-confirmation banner. Lives as a single text object pinned to the camera so it
+  // stays put while the menu scrolls. Owned by the scene root (not any view bucket) — we want it
+  // visible briefly even if the user types CHEATZPLS while in some other view.
+  private buildCheatUnlockFlash(cx: number) {
+    this.cheatUnlockFlash = this.add
+      .text(cx, 200, "CHEATS UNLOCKED", {
+        fontFamily: "system-ui, sans-serif",
+        fontSize: "28px",
+        color: "#ff6688",
+        stroke: "#000000",
+        strokeThickness: 4,
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setVisible(false);
+  }
+
+  private feedCheatBuffer(e: KeyboardEvent) {
+    // Only listen on the main view — typing CHEATZPLS inside a name field, or while DRS settings
+    // are focused, would feel weird. Name input handlers above already short-circuited if focused.
+    if (this.view !== "main") return;
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    const key = e.key;
+    if (typeof key !== "string" || key.length !== 1) return;
+    const ch = key.toUpperCase();
+    if (!/^[A-Z]$/.test(ch)) return;
+    this.cheatBuffer = (this.cheatBuffer + ch).slice(-CHEAT_CODE.length);
+    if (this.cheatBuffer === CHEAT_CODE) {
+      this.cheatBuffer = "";
+      if (!this.cheats.unlocked) {
+        this.cheats.unlocked = true;
+        saveMenuCheats(this.cheats);
+        this.refreshCheatsBtn();
+      }
+      this.showCheatUnlockFlash();
+    }
+  }
+
+  private showCheatUnlockFlash() {
+    const t = this.cheatUnlockFlash;
+    if (!t) return;
+    t.setVisible(true).setAlpha(1);
+    this.tweens.killTweensOf(t);
+    this.tweens.add({
+      targets: t,
+      alpha: 0,
+      delay: 1100,
+      duration: 500,
+      onComplete: () => t.setVisible(false),
+    });
+  }
+
+  private toggleCheat(key: "diamondArmor" | "offRoadWheels" | "mazeSpin" | "hammerTime" | "deathmatch") {
+    this.cheats[key] = !this.cheats[key];
+    saveMenuCheats(this.cheats);
+    this.refreshCheatToggles();
+  }
+
+  private refreshCheatToggles() {
+    for (const t of this.cheatToggles) {
+      const on = this.cheats[t.key];
+      t.bg.setStrokeStyle(on ? 3 : 2, on ? 0xff6688 : 0x444444);
+      t.bg.setFillStyle(on ? 0x2a1a1f : 0x1d1d1d);
+      t.label.setColor(on ? "#ff6688" : "#ffffff");
+    }
+  }
+
+  private refreshCheatsBtn() {
+    if (!this.cheatsBtn) return;
+    this.cheatsBtn.setVisible(this.view === "main" && this.cheats.unlocked);
+  }
+
   private addMain<T extends Phaser.GameObjects.GameObject>(obj: T): T {
     this.mainObjects.push(obj);
+    return obj;
+  }
+
+  private addCheats<T extends Phaser.GameObjects.GameObject>(obj: T): T {
+    this.cheatsObjects.push(obj);
     return obj;
   }
 
@@ -1005,12 +1180,14 @@ export class MenuScene extends Phaser.Scene {
     setAll(this.mainObjects, view === "main");
     setAll(this.settingsObjects, view === "settings");
     setAll(this.fastestLapsObjects, view === "fastestLaps");
+    setAll(this.cheatsObjects, view === "cheats");
     this.hintText?.setText(view === "main" ? "click to pick · ENTER to start" : "click to adjust · ESC to back");
     // The bulk setAll above unconditionally shows every object in the active view's list,
     // including elements that are 1P/2P-conditional (P2 carousel in main, input slots in
     // settings). Re-apply the players-aware layout so those stay hidden in 1P.
     if (view === "main" || view === "settings") this.applyPlayersLayout();
     if (view === "fastestLaps") this.refreshFastestLaps();
+    if (view === "cheats") this.refreshCheatToggles();
     // Re-run the highlight + per-player visibility logic so the DRS picker selection state and
     // 1P/2P-aware row visibility reflect current data after the bulk visibility toggle above.
     this.refresh();
@@ -1035,6 +1212,7 @@ export class MenuScene extends Phaser.Scene {
     this.refreshDrsButtons(this.drsModeP1, this.drsModes.p1, true);
     this.refreshDrsButtons(this.drsModeP2, this.drsModes.p2, this.players === 2);
     this.refreshCockpitCamButtons();
+    this.refreshCheatsBtn();
     this.applyPlayersLayout();
   }
 
@@ -1271,6 +1449,18 @@ export class MenuScene extends Phaser.Scene {
       cockpitCam: this.players === 1 && this.cockpitCam,
       name1: sanitizeName(this.name1, DEFAULT_NAME_1),
       name2: sanitizeName(this.name2, DEFAULT_NAME_2),
+      // Effective cheats: only forward the active flags when unlock is set, so a stale
+      // localStorage flag with unlocked=false (e.g. someone hand-edited it) can't sneak
+      // cheats into a race.
+      cheats: this.cheats.unlocked
+        ? {
+            diamondArmor: this.cheats.diamondArmor,
+            offRoadWheels: this.cheats.offRoadWheels,
+            mazeSpin: this.cheats.mazeSpin,
+            hammerTime: this.cheats.hammerTime,
+            deathmatch: this.cheats.deathmatch,
+          }
+        : null,
     });
   }
 

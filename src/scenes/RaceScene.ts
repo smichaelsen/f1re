@@ -43,7 +43,25 @@ interface RaceInit {
   // Player display names (≤8 chars). Default to "PLAYER 1" / "PLAYER 2" upstream.
   name1?: string;
   name2?: string;
+  // Active cheats for this race. null = none. Forwarded only when the player has unlocked the
+  // cheats menu — see MenuScene.start. AI never benefits from cheats.
+  cheats?: ActiveCheats | null;
 }
+
+export interface ActiveCheats {
+  diamondArmor: boolean;
+  offRoadWheels: boolean;
+  mazeSpin: boolean;
+  hammerTime: boolean;
+  deathmatch: boolean;
+}
+
+const NO_CHEATS: ActiveCheats = { diamondArmor: false, offRoadWheels: false, mazeSpin: false, hammerTime: false, deathmatch: false };
+
+// HAMMERTIME multiplier applied to a human car's config.maxSpeed at construction time.
+// Affects the absolute speed cap only — accel and grip stay untouched, so launch + cornering feel
+// the same; cars just don't bleed off speed on long straights. Stacks with boost / DRS / draft.
+const HAMMER_TIME_TOP_SPEED_MULT = 1.30;
 type RaceState = "countdown" | "racing" | "paused" | "finished";
 
 const NO_INPUT: CarInput = { throttle: 0, brake: 0, steer: 0, useItem: false, useDrs: false };
@@ -119,6 +137,7 @@ export class RaceScene extends Phaser.Scene {
   // Stashed from `init(data)`; passed to DrsManager once at create() time.
   private drsModes: DrsModes = defaultDrsModes();
   private drs!: DrsManager;
+  private cheats: ActiveCheats = NO_CHEATS;
   escapeKey!: Phaser.Input.Keyboard.Key;
   pauseKey!: Phaser.Input.Keyboard.Key;
   // Wall-clock time at which the current pause started. Read on resume to compute the dt
@@ -148,6 +167,7 @@ export class RaceScene extends Phaser.Scene {
       sanitizeName(data.name1, "PLAYER 1"),
       sanitizeName(data.name2, "PLAYER 2"),
     ];
+    this.cheats = data.cheats ?? NO_CHEATS;
   }
 
   preload() {
@@ -193,7 +213,9 @@ export class RaceScene extends Phaser.Scene {
         tertiary: team.tertiary,
       };
       const name = this.playerNames[i] ?? `PLAYER ${i + 1}`;
-      const car = new Car(this, slot.x, slot.y, ensureCarTexture(this, livery), name, true, applyTeamPerf(team.perf));
+      const cfg = applyTeamPerf(team.perf);
+      if (this.cheats.hammerTime) cfg.maxSpeed *= HAMMER_TIME_TOP_SPEED_MULT;
+      const car = new Car(this, slot.x, slot.y, ensureCarTexture(this, livery), name, true, cfg);
       car.heading = slot.heading;
       car.playerIndex = i;
       car.teamId = team.id;
@@ -307,6 +329,12 @@ export class RaceScene extends Phaser.Scene {
       this.aiDriver,
       () => this.audioCtrl.bus(),
       (car, text, ms) => this.flashFor(car, text, ms),
+      (car) => {
+        if (this.cheats.deathmatch && !car.dead) {
+          car.dead = true;
+          if (car.isPlayer) this.flashFor(car, "DEAD", 1500);
+        }
+      },
     );
     this.items.spawn();
 
@@ -468,6 +496,16 @@ export class RaceScene extends Phaser.Scene {
 
     this.raceCam.update(dt);
 
+    // Diamond armor: re-shield humans every frame, with shieldExpiresAt=0 so Car.updateShieldRing
+    // takes the no-expiry branch (no blink, no auto-drop). spin() still consumes the shield on
+    // every hit, but the next frame restores it before any other system can read shielded.
+    if (this.cheats.diamondArmor) {
+      for (const h of this.humans) {
+        h.shielded = true;
+        h.shieldExpiresAt = 0;
+      }
+    }
+
     for (const c of this.cars) c.draft = computeDraft(c, this.cars);
 
     for (let i = 0; i < this.humans.length; i++) {
@@ -476,7 +514,12 @@ export class RaceScene extends Phaser.Scene {
       const input = active ? this.humanInput(i) : NO_INPUT;
       human.audioThrottle = input.throttle;
       human.update(dt, input, this.surfaceFeel(human));
-      if (active && input.useItem) this.items.useItem(human);
+      if (active && input.useItem) {
+        // MAZESPIN: empty inventory + fire pressed → conjure a seeker. ItemSystem.useItem
+        // shifts off the front, so pushing here is FIFO-safe.
+        if (this.cheats.mazeSpin && human.items.length === 0) human.items.push("seeker");
+        this.items.useItem(human);
+      }
       applyTrackBounds(human, this.track, this.fx, this.audioCtrl.bus());
       if (active) this.drs.update(human, input, now);
     }
@@ -509,6 +552,20 @@ export class RaceScene extends Phaser.Scene {
       }
     }
 
+    // DEATHMATCH end-condition: when no car can still race (every car is either dead or
+    // already finished), close out the race. Dead-but-not-finished cars get finishedAtMs set
+    // here so the existing results pipeline (rankedCars, showResults) can render their row.
+    // The progress-based primary sort in rankedCars means rank reflects how far each dead car
+    // got before being knocked out.
+    if (this.state !== "finished" && this.cheats.deathmatch) {
+      const allOut = this.cars.every((c) => c.dead || c.finishedAtMs != null);
+      if (allOut) {
+        for (const c of this.cars) {
+          if (c.finishedAtMs == null) c.finishedAtMs = now;
+        }
+      }
+    }
+
     if (this.state !== "finished" && this.cars.every((c) => c.finishedAtMs != null)) {
       this.state = "finished";
       this.raceEndedAt = now;
@@ -516,6 +573,12 @@ export class RaceScene extends Phaser.Scene {
   }
 
   private surfaceFeel(car: Car): SurfaceFeel {
+    // OFF ROAD WHEELS cheat: humans always read asphalt feel regardless of which surface their
+    // corners are on. Stays opt-in to humans only — cheats never apply to AI.
+    if (car.isPlayer && this.cheats.offRoadWheels) {
+      const asphalt = SURFACE_PARAMS.asphalt;
+      return { drag: asphalt.drag, gripFactor: asphalt.gripFactor };
+    }
     // Both penalties scale linearly with how many corners are on the off-asphalt surface:
     // averaging drag and gripFactor across the 4 corners means 1 corner on grass contributes 25% of grass's penalty,
     // 2 corners → 50%, etc. (asphalt's gripFactor of 1.0 is the no-penalty identity in the average.)
@@ -592,6 +655,9 @@ export class RaceScene extends Phaser.Scene {
   // teleport pop for not having to ESC → restart.
   private updateUnstuck(car: Car, now: number) {
     if (car.finishedAtMs != null) return;
+    // Dead cars (DEATHMATCH cheat) are *meant* to be stuck. Skipping the watchdog avoids
+    // teleporting them back to gates they can no longer drive away from.
+    if (car.dead) return;
     if (now - car.lastCheckpointMs < UNSTUCK_TIMEOUT_MS) return;
     const N = this.track.checkpoints.length;
     const lastCp = (car.nextCheckpoint - 1 + N) % N;
