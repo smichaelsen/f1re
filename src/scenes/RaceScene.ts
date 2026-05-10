@@ -398,7 +398,7 @@ export class RaceScene extends Phaser.Scene {
       this.runRacing(dt, now);
     }
 
-    this.updateHud(now);
+    this.updateHud();
     this.audioCtrl.update(this.humans, this.state === "racing");
   }
 
@@ -682,13 +682,7 @@ export class RaceScene extends Phaser.Scene {
     this.hud.showResults([...header, ...lines, ...footer], iconKeys, false);
   }
 
-  private updateHud(now: number) {
-    const elapsed =
-      this.state === "countdown"
-        ? 0
-        : this.state === "racing"
-          ? now - this.raceStartedAt
-          : this.raceEndedAt - this.raceStartedAt;
+  private updateHud() {
     const positions = computePositions(this.cars, this.track);
     const multi = this.humans.length === 2;
 
@@ -704,7 +698,6 @@ export class RaceScene extends Phaser.Scene {
     for (const s of slots) {
       s.hud.setSpeed(s.car.speed * 0.36);
       s.hud.setLap(s.car.lap + 1, this.totalLaps);
-      s.hud.setTime(elapsed);
       s.hud.setBest(s.car.bestLapMs);
       s.hud.setItem(s.car.items, s.useKey);
       const manual = this.drs.modeFor(s.car) === "manual";

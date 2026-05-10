@@ -40,7 +40,6 @@ export class Hud {
   side: HudSide;
   speedText: Phaser.GameObjects.Text;
   lapText: Phaser.GameObjects.Text;
-  timeText: Phaser.GameObjects.Text;
   bestText: Phaser.GameObjects.Text;
   // Inventory: two slot boxes. Primary (front-of-queue, big), secondary (next-up, smaller and
   // offset back-left). The slot backgrounds are always visible so empty inventory still reads as
@@ -93,8 +92,7 @@ export class Hud {
     const startX = isLeft ? 20 : -20;
     this.speedText = scene.add.text(startX, 20, "", style).setOrigin(anchorX, 0).setScrollFactor(0).setDepth(1000);
     this.lapText = scene.add.text(startX, 50, "", style).setOrigin(anchorX, 0).setScrollFactor(0).setDepth(1000);
-    this.timeText = scene.add.text(startX, 80, "", style).setOrigin(anchorX, 0).setScrollFactor(0).setDepth(1000);
-    this.bestText = scene.add.text(startX, 110, "", style).setOrigin(anchorX, 0).setScrollFactor(0).setDepth(1000);
+    this.bestText = scene.add.text(startX, 80, "", style).setOrigin(anchorX, 0).setScrollFactor(0).setDepth(1000);
     // Inventory boxes + icons. Depth ordering bottom-to-top so the primary slot occludes the
     // secondary's overlap region: secondary bg (999) → secondary icon (1000) → primary bg
     // (1000.5) → primary icon (1001). Backgrounds always visible so empty slots still read.
@@ -132,7 +130,6 @@ export class Hud {
     this.objects = [
       this.speedText,
       this.lapText,
-      this.timeText,
       this.bestText,
       this.itemSecondaryBg,
       this.itemSecondary,
@@ -235,9 +232,6 @@ export class Hud {
   }
   setLap(lap: number, total: number) {
     this.lapText.setText(`LAP ${Math.min(lap, total)}/${total}`);
-  }
-  setTime(ms: number) {
-    this.timeText.setText(`TIME ${formatMs(ms)}`);
   }
   setBest(ms: number | null) {
     this.bestText.setText(`BEST ${ms == null ? "—" : formatMs(ms)}`);
@@ -369,15 +363,13 @@ export class Hud {
     if (isLeft) {
       this.speedText.setPosition(20, 20);
       this.lapText.setPosition(20, 50);
-      this.timeText.setPosition(20, 80);
-      this.bestText.setPosition(20, 110);
+      this.bestText.setPosition(20, 80);
       this.drsText.setPosition(20, 235);
     } else {
       const x = cam.width - 20;
       this.speedText.setPosition(x, 20);
       this.lapText.setPosition(x, 50);
-      this.timeText.setPosition(x, 80);
-      this.bestText.setPosition(x, 110);
+      this.bestText.setPosition(x, 80);
       this.drsText.setPosition(x, 235);
     }
     this.positionItemIcons(multiplayer);
