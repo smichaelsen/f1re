@@ -270,13 +270,30 @@ export class MenuScene extends Phaser.Scene {
 
     cam.setBackgroundColor("#1a1a1a");
     cam.setBounds(0, 0, cam.width, CONTENT_HEIGHT);
+    const maxScroll = () => Math.max(0, CONTENT_HEIGHT - this.cameras.main.height);
     this.input.on("wheel", (_p: Phaser.Input.Pointer, _o: unknown, _dx: number, dy: number) => {
-      this.cameras.main.scrollY = Phaser.Math.Clamp(
-        this.cameras.main.scrollY + dy * 0.5,
-        0,
-        Math.max(0, CONTENT_HEIGHT - this.cameras.main.height),
-      );
+      this.cameras.main.scrollY = Phaser.Math.Clamp(this.cameras.main.scrollY + dy * 0.5, 0, maxScroll());
     });
+    // Touch / mouse drag-scroll. Without this the settings view is unreachable past the fold on
+    // tablet-class viewports (e.g. iPad landscape ≈810px < 1180px content). Start drag only if
+    // pointerdown landed on empty space — any interactive object under the finger handles its
+    // own click, so dragging from a button area doesn't scroll (and tapping doesn't slip into
+    // a drag and lose the click).
+    let dragging = false;
+    let dragStartY = 0;
+    let dragStartScroll = 0;
+    this.input.on("pointerdown", (p: Phaser.Input.Pointer, objs: Phaser.GameObjects.GameObject[]) => {
+      if (objs.length > 0) return;
+      dragging = true;
+      dragStartY = p.y;
+      dragStartScroll = this.cameras.main.scrollY;
+    });
+    this.input.on("pointermove", (p: Phaser.Input.Pointer) => {
+      if (!dragging || !p.isDown) return;
+      this.cameras.main.scrollY = Phaser.Math.Clamp(dragStartScroll - (p.y - dragStartY), 0, maxScroll());
+    });
+    this.input.on("pointerup", () => { dragging = false; });
+    this.input.on("pointerupoutside", () => { dragging = false; });
 
     // Name inputs intercept keystrokes; gate the menu hotkeys so typing "ENTER" in a name field
     // doesn't also start the race. Also routes other characters into the focused input.
@@ -1200,6 +1217,9 @@ export class MenuScene extends Phaser.Scene {
 
   private setView(view: View) {
     this.view = view;
+    // Snap to top whenever a view changes so the user lands on the title, not whatever
+    // scroll position the previous view left behind.
+    this.cameras.main.scrollY = 0;
     if (view !== "settings") {
       this.nameInput1?.blur();
       this.nameInput2?.blur();
