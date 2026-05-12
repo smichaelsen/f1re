@@ -64,6 +64,12 @@ export class Hud {
   countdownText: Phaser.GameObjects.Text | null = null;
   resultsBg: Phaser.GameObjects.Rectangle | null = null;
   resultsText: Phaser.GameObjects.Text | null = null;
+  // Tappable buttons shown alongside the results panel so the screen is usable on touch
+  // devices. Keyboard shortcuts (R, ESC) still work — these are the visible affordance.
+  restartBtn: Phaser.GameObjects.Text | null = null;
+  menuBtn: Phaser.GameObjects.Text | null = null;
+  onRestart: (() => void) | null = null;
+  onMenu: (() => void) | null = null;
   // Pool of car-livery sprites used by the results panel — one per line in the results text
   // (sized to the max number of position rows passed at construction). Index i lines up with
   // line i of resultsText; lines without a row (header / blank / footer) leave their slot's
@@ -214,6 +220,11 @@ export class Hud {
         .setDepth(1201)
         .setVisible(false);
 
+      this.restartBtn = makeResultsBtn(scene, "RESTART");
+      this.restartBtn.on("pointerup", () => this.onRestart?.());
+      this.menuBtn = makeResultsBtn(scene, "MENU");
+      this.menuBtn.on("pointerup", () => this.onMenu?.());
+
       this.objects.push(
         this.posTitle,
         ...this.posRows,
@@ -223,6 +234,8 @@ export class Hud {
         this.broadcastText,
         this.resultsBg,
         this.resultsText,
+        this.restartBtn,
+        this.menuBtn,
       );
     }
   }
@@ -347,12 +360,16 @@ export class Hud {
     this.resultsText.setVisible(true);
     this.resultsBg.setVisible(true);
     this.resultsIconKeys = iconKeys.slice(0, this.resultsRowIcons.length);
+    this.restartBtn?.setVisible(true);
+    this.menuBtn?.setVisible(true);
   }
   hideResults() {
     this.resultsText?.setVisible(false);
     this.resultsBg?.setVisible(false);
     for (const icon of this.resultsRowIcons) icon.setVisible(false);
     this.resultsIconKeys = [];
+    this.restartBtn?.setVisible(false);
+    this.menuBtn?.setVisible(false);
   }
 
   // `multiplayer` = true reroutes the position panel to the bottom-center of the screen,
@@ -485,12 +502,44 @@ export class Hud {
       } else {
         for (const icon of this.resultsRowIcons) icon.setVisible(false);
       }
+      // Tap buttons sit just below the results panel, centered horizontally with it. Below
+      // (not inside) so they don't fight the panel's auto-sized content; the visual link
+      // is the shared horizontal center plus a small gap.
+      if (this.restartBtn && this.menuBtn && this.resultsBg.visible) {
+        const bg = this.resultsBg;
+        const bottomY = bg.getBottomCenter().y + 24;
+        const btnGap = 14;
+        const halfRow = (this.restartBtn.displayWidth + this.menuBtn.displayWidth + btnGap) / 2;
+        const centerX = bg.x + (bg.originX === 1 ? -bg.displayWidth / 2 : 0);
+        this.restartBtn.setPosition(centerX - halfRow + this.restartBtn.displayWidth / 2, bottomY);
+        this.menuBtn.setPosition(centerX + halfRow - this.menuBtn.displayWidth / 2, bottomY);
+      }
     }
     if (this.scene.time.now > this.msgFadeUntil) this.msgText.setText("");
     if (this.broadcastText && this.scene.time.now > this.broadcastFadeUntil) {
       this.broadcastText.setText("");
     }
   }
+}
+
+function makeResultsBtn(scene: Phaser.Scene, label: string): Phaser.GameObjects.Text {
+  const btn = scene.add
+    .text(0, 0, label, {
+      fontFamily: "system-ui, sans-serif",
+      fontSize: "18px",
+      color: "#1a1a1a",
+      backgroundColor: "#ffd24a",
+      padding: { x: 18, y: 10 },
+      fontStyle: "bold",
+    })
+    .setOrigin(0.5)
+    .setScrollFactor(0)
+    .setDepth(1202)
+    .setVisible(false)
+    .setInteractive({ useHandCursor: true });
+  btn.on("pointerover", () => btn.setStyle({ backgroundColor: "#ffe680" }));
+  btn.on("pointerout", () => btn.setStyle({ backgroundColor: "#ffd24a" }));
+  return btn;
 }
 
 function drawSlotBg(scene: Phaser.Scene, size: number): Phaser.GameObjects.Graphics {

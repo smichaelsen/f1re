@@ -304,6 +304,8 @@ export class RaceScene extends Phaser.Scene {
     this.raceCam = new RaceCamera(this.cameras.main, this.humans, this.cockpitCam);
 
     this.hud = new Hud(this, "left", this.cars.length);
+    this.hud.onRestart = () => this.scene.restart();
+    this.hud.onMenu = () => this.scene.start("MenuScene");
     if (this.humans.length === 2) this.hud2 = new Hud(this, "right", this.cars.length);
     this.touch = new TouchControls(this);
 
@@ -753,7 +755,7 @@ export class RaceScene extends Phaser.Scene {
     }
 
     const header = [allDone ? "RACE OVER" : "RESULTS", ""];
-    const footer = ["", "R to restart · ESC for menu"];
+    const footer = [""];
     const iconKeys = [
       ...header.map(() => null as string | null),
       ...rowIcons,
