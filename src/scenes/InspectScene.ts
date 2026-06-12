@@ -245,7 +245,11 @@ export class InspectScene extends Phaser.Scene {
     this.applyCameraIgnore();
     this.repositionUi();
 
-    this.scale.on("resize", () => this.repositionUi());
+    // The ScaleManager is game-global and outlives this scene instance's run; without the
+    // shutdown cleanup every inspector visit stacks another handler firing into a dead scene.
+    const onResize = () => this.repositionUi();
+    this.scale.on("resize", onResize);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.scale.off("resize", onResize));
 
     const kb = this.input.keyboard!;
     this.keys = {

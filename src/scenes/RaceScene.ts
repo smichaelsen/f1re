@@ -113,7 +113,12 @@ export class RaceScene extends Phaser.Scene {
   private fx!: RaceFx;
 
   state: RaceState = "countdown";
-  countdownStartedAt = 0;
+  // Anchored on the first countdown update frame, NOT in create(): the scene clock
+  // (`this.time.now`) only ticks while this scene steps, so a read inside create() is
+  // stale whenever create() runs synchronously off a warm asset cache — it returns the
+  // last frame of the *previous* race (or ~0 on the first run), which made the countdown
+  // start "already elapsed" and never hand over to racing.
+  countdownStartedAt: number | null = null;
   raceStartedAt = 0;
   raceEndedAt = 0;
   // Session-wide fastest lap (across all cars in the current race). Drives the
@@ -353,7 +358,8 @@ export class RaceScene extends Phaser.Scene {
     this.inputReader = new InputReader(this);
 
     this.state = "countdown";
-    this.countdownStartedAt = this.time.now;
+    this.countdownStartedAt = null;
+    this.pausedAtMs = null;
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.audioCtrl.dispose());
     this.events.once(Phaser.Scenes.Events.DESTROY, () => this.audioCtrl.dispose());
@@ -470,26 +476,31 @@ export class RaceScene extends Phaser.Scene {
   }
 
   private runCountdown(now: number) {
+    if (this.countdownStartedAt === null) this.countdownStartedAt = now;
     const elapsed = now - this.countdownStartedAt;
+
+    // The racing handover keys off the threshold, not a display window: a single long
+    // frame gap (tab switch, window drag, GC pause) can jump `elapsed` straight past any
+    // 1s-wide branch, and a transition nested inside one would never fire — leaving the
+    // race stuck on the grid forever.
+    if (elapsed >= 3000) {
+      this.state = "racing";
+      this.raceStartedAt = now;
+      for (const c of this.cars) {
+        c.currentLapStartMs = now;
+        c.nextCheckpoint = 1;
+        c.lastCheckpointMs = now;
+      }
+      this.hud.showCountdown("GO!", "#3aff5a");
+      return;
+    }
+
     if (elapsed < 1000) {
       this.hud.showCountdown("3");
     } else if (elapsed < 2000) {
       this.hud.showCountdown("2");
-    } else if (elapsed < 3000) {
-      this.hud.showCountdown("1");
-    } else if (elapsed < 4000) {
-      this.hud.showCountdown("GO!", "#3aff5a");
-      if (this.state === "countdown") {
-        this.state = "racing";
-        this.raceStartedAt = now;
-        for (const c of this.cars) {
-          c.currentLapStartMs = now;
-          c.nextCheckpoint = 1;
-          c.lastCheckpointMs = now;
-        }
-      }
     } else {
-      this.hud.hideCountdown();
+      this.hud.showCountdown("1");
     }
   }
 

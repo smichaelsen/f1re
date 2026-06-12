@@ -85,6 +85,11 @@ Everything outside the track + physics + items: the framing, the HUD, the menus,
 - `Hud` exposes its game objects via `hud.objects` so the scene can wire the ignore lists in one place.
 - Runtime-spawned world graphics (`fireMissile`, `dropOil`) call `uiCam.ignore(g)` at creation so the UI camera stays HUD-only.
 
+### Countdown robustness (stuck-on-grid fix)
+- **Never read `this.time.now` in `create()`.** The scene clock only ticks while its scene steps; when the track JSON is already cached (re-race, or inspector visited the track), Phaser calls `create()` synchronously from the scene-start queue, so the clock still holds the last frame of the *previous* run (or ~0 on the first). `countdownStartedAt` read there could be stale by minutes → first update frame saw `elapsed > 4000` → the GO transition (nested inside the `elapsed < 4000` display branch) never fired → race permanently stuck on the grid. Now `countdownStartedAt` is `null` after create and anchored on the first `runCountdown` frame.
+- **The countdown→racing handover keys off `elapsed >= 3000`, not a 1s-wide display window.** A single long frame gap (tab switch, window drag, GC pause) could jump `elapsed` past the old `3000..4000` branch and skip the transition. Display branches (3/2/1) are separate from the state transition.
+- **`scale.on("resize")` handlers are removed on scene SHUTDOWN** in MenuScene and InspectScene. The ScaleManager is game-global; without cleanup, every menu/inspector visit stacked another closure firing into a dead scene on window resize.
+
 ## Architecture Decisions
 - **Two-camera split is the pattern for any UI that must not scale with world zoom.** Applied to InspectScene and RaceScene. The `Hud` and `TouchControls` classes own an `objects` array so the scene can wire main/UI camera ignore lists in one place; runtime-spawned world graphics opt out of the UI cam at creation.
 - **Touch detection happens once per scene create.** `TouchControls.active` is set in the constructor from `isTouchDevice()` and never recomputed. A device that toggles input mode mid-race is unsupported (extremely rare; would just need a scene restart).

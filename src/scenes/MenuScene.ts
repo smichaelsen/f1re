@@ -333,7 +333,11 @@ export class MenuScene extends Phaser.Scene {
 
     this.setView("main");
     this.refresh();
-    this.scale.on("resize", () => this.repositionForResize());
+    // The ScaleManager is game-global and outlives this scene instance's run; without the
+    // shutdown cleanup every menu visit stacks another handler that fires into a dead scene.
+    const onResize = () => this.repositionForResize();
+    this.scale.on("resize", onResize);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.scale.off("resize", onResize));
   }
 
   private buildMainView(cx: number) {
