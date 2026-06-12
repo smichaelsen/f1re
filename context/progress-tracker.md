@@ -9,6 +9,7 @@ Detailed progress lives in topic files under `context/progress/`. Read the files
 - [Stadium](progress/stadium.md)
 - [Temple of Speed](progress/temple-of-speed.md)
 - [Champions' Wall](progress/champions-wall.md)
+- [Montmeló](progress/montmelo.md)
 
 ### Systems
 - [Track rendering + surface system](progress/track-rendering.md)

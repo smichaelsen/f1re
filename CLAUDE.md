@@ -8,7 +8,7 @@ Read the following files in order before implementing or making any architectura
 4. `context/code-standards.md` — implementation rules and conventions
 5. `context/ai-workflow-rules.md` — development workflow, scoping rules, and delivery approach
 6. `context/progress-tracker.md` — index of progress files. Detailed status lives in the topic files under `context/progress/`:
-   - `progress/oval.md`, `progress/stadium.md`, `progress/temple-of-speed.md`, `progress/champions-wall.md` — per-track status
+   - `progress/oval.md`, `progress/stadium.md`, `progress/temple-of-speed.md`, `progress/champions-wall.md`, `progress/montmelo.md` — per-track status
    - `progress/track-rendering.md` — render + surface system
    - `progress/physics.md` — driving model, collisions, lap tracking
    - `progress/ai-driving.md` — AI behavior

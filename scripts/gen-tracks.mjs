@@ -6,13 +6,14 @@ import oval from "./tracks/oval.mjs";
 import stadium from "./tracks/stadium.mjs";
 import templeOfSpeed from "./tracks/temple-of-speed.mjs";
 import championsWall from "./tracks/champions-wall.mjs";
+import montmelo from "./tracks/montmelo.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const outDir = join(__dirname, "..", "public", "tracks");
 mkdirSync(outDir, { recursive: true });
 
-const tracks = [oval, stadium, templeOfSpeed, championsWall];
+const tracks = [oval, stadium, templeOfSpeed, championsWall, montmelo];
 
 for (const t of tracks) {
   const path = join(outDir, t.file);

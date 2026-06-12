@@ -32,7 +32,7 @@ import {
   type MenuCheats,
 } from "./MenuCheats";
 
-export type TrackKey = "oval" | "stadium" | "temple-of-speed" | "champions-wall";
+export type TrackKey = "oval" | "stadium" | "temple-of-speed" | "champions-wall" | "montmelo";
 export type Difficulty = "easy" | "normal" | "hard";
 
 export interface DifficultyParams {
@@ -70,6 +70,7 @@ const TRACKS: { key: TrackKey; label: string; sub: string }[] = [
   { key: "stadium", label: "STADIUM", sub: "long straights, 4 corners" },
   { key: "temple-of-speed", label: "TEMPLE OF SPEED", sub: "chicanes & flat-out straights" },
   { key: "champions-wall", label: "CHAMPIONS' WALL", sub: "hairpin & diagonal back-straight" },
+  { key: "montmelo", label: "MONTMELÓ", sub: "sweeping esses & stadium loop" },
 ];
 
 const DIFFICULTY_BUTTONS: { key: Difficulty; label: string }[] = [
