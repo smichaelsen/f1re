@@ -64,6 +64,9 @@ export class Car {
   onTrack = true;
   boostTimer = 0;
   spinTimer = 0;
+  // Scene-clock timestamp of the last weapon hit that actually landed (spin() returned true).
+  // Read by Standings.computePositions to spin this car's leaderboard icon. -1 = never hit.
+  hitSpinStartMs = -1;
   shielded = false;
   shieldExpiresAt = 0;
   // DEATHMATCH cheat flag. Set externally (RaceScene) when this car is hit by an item under
@@ -281,6 +284,7 @@ export class Car {
       return false;
     }
     this.spinTimer = seconds;
+    this.hitSpinStartMs = this.scene.time.now;
     return true;
   }
 

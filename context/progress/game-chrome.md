@@ -34,6 +34,7 @@ Everything outside the track + physics + items: the framing, the HUD, the menus,
 - Results overlay: compact bottom-right while the player is still racing → flips to a full center "RACE OVER" once the player finishes.
 - Format: P1 absolute total time; P2..PN interval to the car ahead (`+s.cc` or `+m:ss.cc` for time, `+N LAP(S)` for lap-down).
 - Best lap per car shown in full mode. Monospace font for column alignment. Panel auto-sizes to text.
+- **Leaderboard icon spins on weapon hit.** When `Car.spin()` lands (not shield-blocked), the car stamps `hitSpinStartMs` from the scene clock. `Standings.computePositions` derives `PositionRow.iconRotation` — two full turns over 1.2s with cubic ease-out, back to 0 after — and `Hud.setPositions` applies it to the row's livery icon. Icons use center origin (required for in-place rotation); `Hud.update` offsets the anchor by half the icon width to keep the old right-edge alignment.
 - **AI naming uses per-team driver names.** Each `Team.drivers[2]` slot maps to one of the up-to-2 AI seats per team — no numeric suffixes. Player names come from the new settings inputs (default `PLAYER 1` / `PLAYER 2`). Both AI and player names cap at 8 chars; `showResults` pads the name column to 8, `Hud.setPositions` interpolates the name unpadded so longer names just shift the lap tag right. Position panel and results stay keyed off `Car` refs (`rankedCars()` is the single source); names are display-only.
 
 ### Inspector

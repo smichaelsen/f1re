@@ -10,6 +10,9 @@ export interface PositionRow {
   // Texture key for this car's livery sprite. Hud renders a small car icon to the left of
   // each row so the player can see at a glance what teams the cars in the field belong to.
   textureKey: string;
+  // Rotation (radians) applied to the row's car icon. Driven by Standings while a car's
+  // weapon-hit spin animation is running; 0 otherwise.
+  iconRotation: number;
 }
 
 export type HudSide = "left" | "right";
@@ -159,12 +162,13 @@ export class Hud {
           .setScrollFactor(0)
           .setDepth(1000);
         this.posRows.push(row);
-        // Position-row icon. Origin (1, 0.5) so its right edge anchors to text.left - gap.
+        // Position-row icon. Center origin so the weapon-hit spin rotates it in place;
+        // update() compensates by shifting the anchor half the icon width left of the text.
         // __DEFAULT is Phaser's built-in 32×32 white texture and is always loaded; it acts as
         // a placeholder until setPositions swaps in the car's livery key. Hidden by default.
         const posIcon = scene.add
           .sprite(0, 0, "__DEFAULT")
-          .setOrigin(1, 0.5)
+          .setOrigin(0.5, 0.5)
           .setScale(0.55)
           .setScrollFactor(0)
           .setDepth(1000)
@@ -331,7 +335,7 @@ export class Hud {
       // Each row's car icon. Texture key comes through PositionRow from the live car sprite,
       // so liveries match the in-world cars (including the random per-car variant).
       if (icon) {
-        icon.setTexture(r.textureKey).setVisible(true);
+        icon.setTexture(r.textureKey).setRotation(r.iconRotation).setVisible(true);
       }
     }
   }
@@ -444,7 +448,9 @@ export class Hud {
           continue;
         }
         const lc = text.getLeftCenter();
-        icon.setPosition(lc.x - ICON_GAP, lc.y);
+        // Center origin (needed for in-place spin) → step back half the icon width so the
+        // icon's right edge still sits ICON_GAP left of the text.
+        icon.setPosition(lc.x - ICON_GAP - icon.displayWidth / 2, lc.y);
       }
     }
 
