@@ -4,6 +4,7 @@ import { Track } from "../entities/Track";
 import { SkidMarks } from "../entities/SkidMarks";
 import { DustParticles } from "../entities/DustParticles";
 import { SparkParticles } from "../entities/SparkParticles";
+import { SmokeParticles } from "../entities/SmokeParticles";
 import { DrsAirflow } from "../entities/DrsAirflow";
 
 const SKID_ALPHA_PER_FRAME = 0.06;
@@ -16,6 +17,7 @@ export class RaceFx {
   private skidMarks: SkidMarks;
   private dust: DustParticles;
   private sparks: SparkParticles;
+  private smoke: SmokeParticles;
   private drsAirflow: DrsAirflow;
   private drsAirflowParity = false;
 
@@ -23,6 +25,7 @@ export class RaceFx {
     this.skidMarks = createSkidMarks(scene, track);
     this.dust = new DustParticles(scene);
     this.sparks = new SparkParticles(scene);
+    this.smoke = new SmokeParticles(scene);
     this.drsAirflow = new DrsAirflow(scene);
   }
 
@@ -42,6 +45,14 @@ export class RaceFx {
 
   sparkBurst(x: number, y: number, count: number): void {
     this.sparks.burst(x, y, count);
+  }
+
+  sparkScrape(x: number, y: number, count: number): void {
+    this.sparks.scrape(x, y, count);
+  }
+
+  smokePuff(x: number, y: number, count: number): void {
+    this.smoke.puff(x, y, count);
   }
 
   // Drop a stamp at each of the car's 4 OBB corners while it's actually skidding.

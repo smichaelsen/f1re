@@ -4,9 +4,13 @@ import { AudioBus } from "../audio/AudioBus";
 import { playWallThumpSfx } from "../audio/ItemSfx";
 import { RaceFx } from "../race/RaceFx";
 
-// Wall impact thresholds. Sparks + thump only above SPARK_VN_THRESHOLD so the constant
-// wall-hugging contact when a car drifts along a wall doesn't fire effects every frame.
+// Wall impact thresholds. Spark burst + thump only above SPARK_VN_THRESHOLD; hits below it
+// that still slide along the wall fast (tangential speed above SCRAPE_VT_FLOOR) drip grinding
+// sparks instead, one per contact frame. Hard hits above SMOKE_VN_THRESHOLD add a smoke puff
+// on top of the burst.
 const SPARK_VN_THRESHOLD = 60;
+const SCRAPE_VT_FLOOR = 140;
+const SMOKE_VN_THRESHOLD = 240;
 // Wall response: low restitution (cars don't bounce dramatically) plus tangential scrub
 // (lose some along-wall speed). Tuned for arcade feel — high enough that scraping a wall costs
 // time, low enough that it doesn't yank the car to a stop.
@@ -53,11 +57,23 @@ export function applyTrackBounds(
   car.sprite.y -= worstNy * worstOverflow;
 
   const vn = car.vx * worstNx + car.vy * worstNy;
-  if (vn <= 0) return;
-
   const tx = -worstNy;
   const ty = worstNx;
   const vt = car.vx * tx + car.vy * ty;
+
+  // Push the emit point slightly off the wall so sparks don't visually clip into it.
+  const hx = worstHitX - worstNx * 2;
+  const hy = worstHitY - worstNy * 2;
+
+  // Grinding along the wall (contact without a real impact): drip scrape sparks while the car
+  // slides fast enough. Covers both pushing-in (low positive vn) and separating (vn <= 0)
+  // contact frames, so a sustained drift against the wall sparks the whole way.
+  if (vn <= SPARK_VN_THRESHOLD && Math.abs(vt) >= SCRAPE_VT_FLOOR) {
+    fx.sparkScrape(hx, hy, 1);
+  }
+
+  if (vn <= 0) return;
+
   const newVn = -vn * WALL_RESTITUTION;
   const newVt = vt * WALL_TANGENTIAL_SCRUB;
   car.vx = worstNx * newVn + tx * newVt;
@@ -65,11 +81,11 @@ export function applyTrackBounds(
 
   if (vn <= SPARK_VN_THRESHOLD) return;
 
-  // Push the emit point slightly off the wall so sparks don't visually clip into it.
-  const hx = worstHitX - worstNx * 2;
-  const hy = worstHitY - worstNy * 2;
   const count = Math.min(20, Math.round(vn / 18));
   fx.sparkBurst(hx, hy, count);
+  if (vn > SMOKE_VN_THRESHOLD) {
+    fx.smokePuff(hx, hy, Math.min(10, 4 + Math.round((vn - SMOKE_VN_THRESHOLD) / 50)));
+  }
   if (audioBus) {
     // Map vn 60 → ~0, vn 360 → 1. Same threshold as sparks so visual + audio agree.
     const intensity = Math.min(1, (vn - SPARK_VN_THRESHOLD) / 300);
