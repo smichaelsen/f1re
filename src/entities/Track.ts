@@ -64,6 +64,65 @@ const TRACK_EDGE_LINE = 0xffffff;
 const RACING_LINE_ITERATIONS = 200;
 const RACING_LINE_MARGIN = 24;
 
+// Surface texture overlays (mowed-grass stripes, asphalt grain, gravel specks).
+// Textures are generated once per game and shared across tracks; alphas are the
+// tuning knobs for how strong each treatment reads.
+const STRIPE_TEX = "track-grass-stripes";
+const GRAIN_TEX = "track-asphalt-grain";
+const GRAVEL_TEX = "track-gravel-specks";
+const STRIPE_ALPHA = 0.05;
+const GRAIN_ALPHA = 0.5;
+const GRAVEL_ALPHA = 0.5;
+
+function ensureStripeTexture(scene: Phaser.Scene) {
+  if (scene.textures.exists(STRIPE_TEX)) return;
+  const size = 256; // two 128px mow bands per tile
+  const tex = scene.textures.createCanvas(STRIPE_TEX, size, size)!;
+  const ctx = tex.getContext();
+  ctx.fillStyle = "rgba(255,255,255,1)";
+  ctx.fillRect(0, size / 2, size, size / 2);
+  tex.refresh();
+}
+
+function ensureGrainTexture(scene: Phaser.Scene) {
+  if (scene.textures.exists(GRAIN_TEX)) return;
+  const size = 128;
+  const tex = scene.textures.createCanvas(GRAIN_TEX, size, size)!;
+  const ctx = tex.getContext();
+  const img = ctx.createImageData(size, size);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const v = Math.random() < 0.5 ? 255 : 0;
+    img.data[i] = v;
+    img.data[i + 1] = v;
+    img.data[i + 2] = v;
+    img.data[i + 3] = Math.floor(Math.random() * 36);
+  }
+  ctx.putImageData(img, 0, 0);
+  tex.refresh();
+}
+
+function ensureGravelTexture(scene: Phaser.Scene) {
+  if (scene.textures.exists(GRAVEL_TEX)) return;
+  const size = 128;
+  const tex = scene.textures.createCanvas(GRAVEL_TEX, size, size)!;
+  const ctx = tex.getContext();
+  for (let i = 0; i < 150; i++) {
+    const x = Math.floor(Math.random() * size);
+    const y = Math.floor(Math.random() * size);
+    const s = 2 + Math.floor(Math.random() * 2);
+    const a = 0.25 + Math.random() * 0.3;
+    const c = Math.random() < 0.45 ? 255 : 0;
+    ctx.fillStyle = `rgba(${c},${c},${c},${a})`;
+    // Draw wrapped copies so specks crossing the tile edge tile seamlessly.
+    for (const dx of x + s > size ? [0, -size] : [0]) {
+      for (const dy of y + s > size ? [0, -size] : [0]) {
+        ctx.fillRect(x + dx, y + dy, s, s);
+      }
+    }
+  }
+  tex.refresh();
+}
+
 export class Track {
   scene: Phaser.Scene;
   name: string;
@@ -265,23 +324,44 @@ export class Track {
     const wb = this.worldBounds;
     g.fillRect(wb.x, wb.y, wb.w, wb.h);
 
-    this.fillLoop(g, this.offsetLoopVarying("outside"), SURFACE_PARAMS[this.runoff.outside.surface].color);
-    for (const p of this.outsidePatches) this.fillPolygon(g, p.polygon, SURFACE_PARAMS[p.surface].color);
+    // Paint order interleaves opaque fill layers with textured overlay sprites:
+    // every fill drawn after an overlay clips it, so each overlay only needs a
+    // single-polygon mask (or none) instead of exact region geometry.
+    ensureStripeTexture(this.scene);
+    ensureGrainTexture(this.scene);
+    this.addOverlay(STRIPE_TEX, STRIPE_ALPHA, null);
 
-    this.fillLoop(g, this.offsetLoop(-asphaltHalf), SURFACE_PARAMS.asphalt.color);
+    const outsideLoop = this.offsetLoopVarying("outside");
+    const insideLoop = this.offsetLoopVarying("inside");
+    const asphaltOutside = this.offsetLoop(-asphaltHalf);
+    const asphaltInside = this.offsetLoop(asphaltHalf);
 
-    this.fillLoop(g, this.offsetLoop(asphaltHalf), SURFACE_PARAMS[this.runoff.inside.surface].color);
-    for (const p of this.insidePatches) this.fillPolygon(g, p.polygon, SURFACE_PARAMS[p.surface].color);
+    const gOut = this.addLayer();
+    this.fillLoop(gOut, outsideLoop, SURFACE_PARAMS[this.runoff.outside.surface].color);
+    for (const p of this.outsidePatches) this.fillPolygon(gOut, p.polygon, SURFACE_PARAMS[p.surface].color);
+    this.addGravelSpecks("outside", outsideLoop, this.outsidePatches);
 
-    this.fillLoop(g, this.offsetLoopVarying("inside"), WORLD_GRASS);
+    const gAsphalt = this.addLayer();
+    this.fillLoop(gAsphalt, asphaltOutside, SURFACE_PARAMS.asphalt.color);
+    this.addOverlay(GRAIN_TEX, GRAIN_ALPHA, [asphaltOutside]);
 
-    this.strokeLoop(g, this.offsetLoopVarying("outside"), WALL_COLOR, 4);
-    this.strokeLoop(g, this.offsetLoopVarying("inside"), WALL_COLOR, 4);
+    const gIn = this.addLayer();
+    this.fillLoop(gIn, asphaltInside, SURFACE_PARAMS[this.runoff.inside.surface].color);
+    for (const p of this.insidePatches) this.fillPolygon(gIn, p.polygon, SURFACE_PARAMS[p.surface].color);
+    this.addGravelSpecks("inside", asphaltInside, this.insidePatches);
 
-    this.strokeLoop(g, this.offsetLoop(-asphaltHalf), TRACK_EDGE_LINE, 2);
-    this.strokeLoop(g, this.offsetLoop(asphaltHalf), TRACK_EDGE_LINE, 2);
+    const gField = this.addLayer();
+    this.fillLoop(gField, insideLoop, WORLD_GRASS);
+    this.addOverlay(STRIPE_TEX, STRIPE_ALPHA, [insideLoop]);
 
-    this.drawApexKerbs(g, asphaltHalf, kerbStripe);
+    const gTop = this.addLayer();
+    this.strokeLoop(gTop, outsideLoop, WALL_COLOR, 4);
+    this.strokeLoop(gTop, insideLoop, WALL_COLOR, 4);
+
+    this.strokeLoop(gTop, asphaltOutside, TRACK_EDGE_LINE, 2);
+    this.strokeLoop(gTop, asphaltInside, TRACK_EDGE_LINE, 2);
+
+    this.drawApexKerbs(gTop, asphaltHalf, kerbStripe);
 
     const dashG = this.scene.add.graphics();
     dashG.setDepth(1);
@@ -308,6 +388,50 @@ export class Track {
         sf.fillRect(j - 10, i, tile, tile);
       }
     }
+  }
+
+  /** Fresh graphics layer at track depth; render order = creation order within depth 0. */
+  private addLayer(): Phaser.GameObjects.Graphics {
+    const layer = this.scene.add.graphics();
+    layer.setDepth(0);
+    return layer;
+  }
+
+  /**
+   * World-bounds-sized TileSprite showing a repeating texture, optionally clipped to mask
+   * polygons. All overlays share the same origin so their tile patterns align across layers.
+   */
+  private addOverlay(texKey: string, alpha: number, maskPolys: TrackPoint[][] | null) {
+    const wb = this.worldBounds;
+    const sprite = this.scene.add.tileSprite(wb.x, wb.y, wb.w, wb.h, texKey);
+    sprite.setOrigin(0, 0);
+    sprite.setDepth(0);
+    sprite.setAlpha(alpha);
+    if (!maskPolys) return;
+    const maskG = this.scene.make.graphics({ x: 0, y: 0 }, false);
+    maskG.fillStyle(0xffffff, 1);
+    for (const poly of maskPolys) {
+      maskG.beginPath();
+      maskG.moveTo(poly[0].x, poly[0].y);
+      for (let i = 1; i < poly.length; i++) maskG.lineTo(poly[i].x, poly[i].y);
+      maskG.closePath();
+      maskG.fillPath();
+    }
+    sprite.setMask(maskG.createGeometryMask());
+  }
+
+  /**
+   * Speck overlay for gravel areas on one side. A gravel runoff band masks with the whole
+   * band outer loop (the asphalt + infield region it also covers gets painted over by the
+   * layers drawn afterwards); a non-gravel band still specks its gravel patches individually.
+   */
+  private addGravelSpecks(side: Side, bandLoop: TrackPoint[], patches: SurfacePatch[]) {
+    const polys: TrackPoint[][] = [];
+    if (this.runoff[side].surface === "gravel") polys.push(bandLoop);
+    else for (const p of patches) if (p.surface === "gravel") polys.push(p.polygon);
+    if (polys.length === 0) return;
+    ensureGravelTexture(this.scene);
+    this.addOverlay(GRAVEL_TEX, GRAVEL_ALPHA, polys);
   }
 
   private offsetLoop(offset: number): TrackPoint[] {
