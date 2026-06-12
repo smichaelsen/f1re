@@ -1,4 +1,4 @@
-import { catmullRomLoop } from "./_shared.mjs";
+import { catmullRomLoop, clampedRunoffWidths } from "./_shared.mjs";
 
 /**
  * Montmeló — Barcelona-Catalunya-shaped loop (2023 no-chicane layout).
@@ -174,9 +174,13 @@ export default {
     width: 130,
     checkpoints: 12,
     startIndex: 0,
+    // Per-point widths: the esses fold sections to within ~180 world units of
+    // each other (free gap ~50 after asphalt), so uniform 90-unit gravel made
+    // adjacent sections' runoff polygons overlap — crossing walls and confused
+    // wall collisions. Each point's runoff is clamped to half the free gap.
     runoff: {
-      outside: { surface: "gravel", width: 90 },
-      inside: { surface: "grass", width: 50 },
+      outside: { surface: "gravel", width: clampedRunoffWidths(centerline, 130, 90, "outside") },
+      inside: { surface: "grass", width: clampedRunoffWidths(centerline, 130, 50, "inside") },
     },
     patches: [],
     // Two real-world DRS zones: back straight (detection before T9) and the

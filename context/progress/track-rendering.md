@@ -25,6 +25,7 @@ How tracks are drawn from JSON, plus the surface lookup that drives physics.
 - `Track.offsetLoopVarying(side)` builds the runoff outer-edge polygon with per-point widths. The renderer uses it for runoff fills, walls, and the inside-grass mask. Asphalt edges still use `offsetLoop` because asphalt width is uniform.
 - Backward compatible: existing v1 / v2 tracks with `width: number` render unchanged.
 - Unlocks Monaco-style tracks where walls hug the asphalt at corners and runoff opens up on straights. Also resolves the offset-loop self-intersection issue at sharp curves (narrow runoff at sharp corners avoids the perpendicular crossings that produced the X-pattern artifact).
+- **`clampedRunoffWidths()` in `scripts/tracks/_shared.mjs`** computes safe per-point arrays at gen time: clamps to half the free gap between nearby track sections, to the curvature radius on the concave side of corners, then runs a fixpoint pass (build actual offset polygon → shrink widths at crossing segments → repeat) until the wall loop has zero self-intersections. Authored for Montmeló, reusable for any traced track. Important because overlapping runoff polygons aren't just ugly — the collision probe's nearest-centerline-index flips inside the overlap, letting cars drive through walls.
 
 ## Architecture Decisions
 - **Track JSON is the source of truth for geometry + surfaces.** Engine code never embeds track-specific values. New tracks ship as JSON + one `MenuScene.TRACKS` entry.
