@@ -87,6 +87,8 @@ export class Track {
   racingLineCurvature: number[] = [];
   drsDetections: DrsDetectionRuntime[] = [];
   drsZones: DrsZoneRuntime[] = [];
+  /** World rect covering the track plus margin; drives the grass fill and camera bounds. */
+  worldBounds: { x: number; y: number; w: number; h: number };
 
   constructor(scene: Phaser.Scene, data: TrackData) {
     this.scene = scene;
@@ -112,6 +114,7 @@ export class Track {
       else this.insidePatches.push(p);
     }
 
+    this.worldBounds = this.computeWorldBounds();
     this.computeRacingLine(data.racingLineOverrides);
 
     this.graphics = scene.add.graphics();
@@ -223,6 +226,34 @@ export class Track {
     return new Track(scene, data);
   }
 
+  /**
+   * Centerline bbox padded by asphalt half-width, the widest runoff, and camera
+   * breathing room. Tracks wider than the old fixed ±3000 rect (e.g. Montmeló)
+   * stay pannable, and the grass fill always covers the camera-reachable area.
+   */
+  private computeWorldBounds() {
+    const PAD = 600;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of this.centerline) {
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y > maxY) maxY = p.y;
+    }
+    const maxRunoff = Math.max(
+      ...[this.runoff.outside.width, this.runoff.inside.width].map((w) =>
+        Array.isArray(w) ? Math.max(...w) : w,
+      ),
+    );
+    const margin = this.width / 2 + maxRunoff + PAD;
+    return {
+      x: minX - margin,
+      y: minY - margin,
+      w: maxX - minX + margin * 2,
+      h: maxY - minY + margin * 2,
+    };
+  }
+
   private draw() {
     const g = this.graphics;
     g.clear();
@@ -231,7 +262,8 @@ export class Track {
     const kerbStripe = 12;
 
     g.fillStyle(WORLD_GRASS, 1);
-    g.fillRect(-3000, -3000, 6000, 6000);
+    const wb = this.worldBounds;
+    g.fillRect(wb.x, wb.y, wb.w, wb.h);
 
     this.fillLoop(g, this.offsetLoopVarying("outside"), SURFACE_PARAMS[this.runoff.outside.surface].color);
     for (const p of this.outsidePatches) this.fillPolygon(g, p.polygon, SURFACE_PARAMS[p.surface].color);

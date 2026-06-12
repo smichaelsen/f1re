@@ -1,7 +1,6 @@
 import Phaser from "phaser";
 import { Car } from "../entities/Car";
 
-const WORLD_BOUNDS = { x: -3000, y: -3000, w: 6000, h: 6000 };
 const DEFAULT_ZOOM = 0.85;
 
 const LOOKAHEAD_K = 0.35;
@@ -27,8 +26,9 @@ export class RaceCamera {
     private cam: Phaser.Cameras.Scene2D.Camera,
     private humans: readonly Car[],
     private cockpitCam: boolean,
+    worldBounds: { x: number; y: number; w: number; h: number },
   ) {
-    this.cam.setBounds(WORLD_BOUNDS.x, WORLD_BOUNDS.y, WORLD_BOUNDS.w, WORLD_BOUNDS.h);
+    this.cam.setBounds(worldBounds.x, worldBounds.y, worldBounds.w, worldBounds.h);
     if (this.humans.length === 1) {
       const player = this.humans[0];
       this.cam.startFollow(player.sprite, true, 0.12, 0.12);

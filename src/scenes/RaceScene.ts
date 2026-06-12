@@ -301,7 +301,7 @@ export class RaceScene extends Phaser.Scene {
     this.cars = [...this.humans, ...this.ai];
     this.drs.init(this.cars);
 
-    this.raceCam = new RaceCamera(this.cameras.main, this.humans, this.cockpitCam);
+    this.raceCam = new RaceCamera(this.cameras.main, this.humans, this.cockpitCam, this.track.worldBounds);
 
     this.hud = new Hud(this, "left", this.cars.length);
     this.hud.onRestart = () => this.scene.restart();
